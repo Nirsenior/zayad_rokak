@@ -1,0 +1,62 @@
+:root {
+  /* Figma DS — Dark Blue palette */
+  --ds-bg-app: #0a0c10;
+  --ds-bg-default: #21242b;
+  --ds-bg-default-02: #21242b;
+  --ds-bg-panel: #14151a;
+  --ds-border-subtle: #14151a;
+  --ds-border-muted: #686767;
+  --ds-text-primary: #f5fafd;
+  --ds-text-heading: #e6f5ff;
+  --ds-text-secondary: #a9c3ce;
+  --ds-text-muted: rgba(217, 217, 217, 0.4);
+  --ds-glass-bg: rgba(29, 29, 30, 0.6);
+  --ds-shadow-panel: 0 2px 3.5px rgba(0, 0, 0, 0.5);
+  --ds-shadow-glass: 0 0 4px rgba(0, 0, 0, 0.8);
+  --ds-blur-glass: blur(7px);
+
+  --ds-header-height: 46px;
+  --ds-rail-width: 57px;
+  --ds-side-menu-bg: rgba(39, 40, 41, 0.9);
+  --ds-side-menu-active-bg: rgba(255, 255, 255, 0.15);
+  --ds-tool-btn-size: 44px;
+  --ds-organizer-width: 328px;
+  --ds-options-width: 40px;
+  --ds-organizer-surface: var(--ds-bg-panel);
+  --ds-organizer-header: var(--ds-bg-default);
+  --ds-organizer-footer: var(--ds-bg-app);
+  --ds-organizer-content: var(--ds-bg-default-02);
+  --ds-organizer-border: var(--ds-border-subtle);
+  --ds-organizer-hover: rgba(255, 255, 255, 0.06);
+  /** ריווח מימין (מעל טוגל תכנון/ניהו"ק) — מעל כפתור שכבות */
+  --ds-org-layers-strip: calc(var(--ds-tool-btn-size) + 32px);
+  --ds-org-text-xs: 12px;
+  --ds-org-text-sm: 13px;
+  --ds-org-text-base: 15px;
+  --ds-org-text-md: 16px;
+  --ds-org-text-lg: 17px;
+  --ds-org-text-xl: 18px;
+  --ds-org-icon-sm: 14;
+  --ds-org-icon-md: 16;
+  --ds-org-icon-lg: 18;
+  --ds-org-row-min-h: 36px;
+  --ds-org-option-btn: 44px;
+  --ds-radius-sm: 6px;
+  --ds-radius-md: 8px;
+
+  --ds-font: 'Assistant', 'Heebo', Arial, sans-serif;
+  --ds-font-weight-regular: 400;
+  --ds-font-weight-semibold: 600;
+  --ds-font-weight-bold: 700;
+  /** Figma Typography/2 — כותרת, Mission Plan, User */
+  --ds-text-size-body: 16px;
+  --ds-text-size-caption: 12px;
+  --ds-line-height-body: normal;
+  --ds-line-height-tight: 1.15;
+  --ds-text-caption: #c5c6ca;
+
+  /** רוחב שכבה — אופציה 1 ו-2 */
+  --ds-share-unit: #3b82f6;
+  --ds-share-brigade: #a855f7;
+  --ds-share-pool: #f59e0b;
+}

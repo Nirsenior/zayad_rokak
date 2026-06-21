@@ -1,0 +1,102 @@
+@startuml Polygon_Workflow
+
+skinparam ParticipantPadding 10
+skinparam BoxPadding 10
+skinparam MaxMessageSize 150
+skinparam ResponseMessageBelowTransition true
+
+' Define modern dark-mode style colors
+skinparam backgroundcolor #12151c
+skinparam actor {
+    BackgroundColor #2ecc71
+    BorderColor #27ae60
+    FontColor #ffffff
+}
+skinparam participant {
+    BackgroundColor #34495e
+    BorderColor #2c3e50
+    FontColor #ffffff
+}
+skinparam database {
+    BackgroundColor #e67e22
+    BorderColor #d35400
+    FontColor #ffffff
+}
+
+actor "מפעיל שטח (אול\"ר)" as FieldOp
+actor "מפעיל מפקדה (Web)" as HQOp
+
+box "קצה לקוח (Client Sides)" #161a24
+    participant "אפליקציית אול\"ר\n(alar-app)" as AlarClient
+    participant "ממשק מפקדה\n(web-app)" as WebClient
+end box
+
+box "שרת וגישור (Backend & Relay)" #1d2230
+    participant "שרת גישור\n(backend-relay)" as Relay
+    database "מאגר נתונים\n(persisted_requests.json)" as DB
+end box
+
+== שלב א': יצירת הבקשה והגשתה ==
+
+alt מוגש מאפליקציית השטח (אול"ר)
+    FieldOp -> AlarClient: ציור פוליגון מותאם/בחירת מסדרון, גובה ותדרים
+    AlarClient -> AlarClient: יצירת אובייקט בקשה (Pending Review)
+    AlarClient -> Relay: שליחת WebSocket (NEW_FLIGHT_REQUEST)
+else מוגש ידנית מהמפקדה (עבור כוח בקשר)
+    HQOp -> WebClient: ציור פוליגון ישירות על המפה הטקטית בשם הכוח
+    WebClient -> WebClient: יצירת אובייקט בקשה (Pending Review)
+    WebClient -> Relay: שליחת WebSocket (NEW_FLIGHT_REQUEST)
+end
+
+== שלב ב': קליטה ושימור הנתונים בשרת ==
+
+Relay -> DB: בדיקת כפילויות ושמירת הבקשה לקובץ הדיסק
+activate DB
+DB --> Relay: אישור שמירה ב-JSON DB
+deactivate DB
+
+Relay -> WebClient: שידור הבראדקאסט (NEW_FLIGHT_REQUEST) לכל הלקוחות המחוברים
+Relay -> AlarClient: (בראדקאסט מקביל במידה והבקשה נוצרה מהמפקדה)
+
+== שלב ג': עיבוד בקשות ובדיקת קונפליקטים במפקדה ==
+
+WebClient -> WebClient: הרצת מנוע מניעת קונפליקטים (Deconfliction Checks)
+note right of WebClient
+  מבוצעות 3 בדיקות זמ"א:
+  1. **מרחב**: חפיפה גיאוגרפית
+  2. **גובה**: טווחי Alt min/max
+  3. **תדר**: חפיפת תדרי רדיו
+end note
+
+alt נמצאו קונפליקטים
+    WebClient -> WebClient: צביעת הבקשה בכתום (CONFLICT) + הצגת אזהרות קריאות וברורות
+else תקין לחלוטין
+    WebClient -> WebClient: צביעת הבקשה בצהוב (PENDING_REVIEW)
+end
+
+== שלב ד': אישור הבקשה ע"י קצין רוק"ק במפקדה ==
+
+HQOp -> WebClient: פתיחת כרטיס "פרטים נוספים" (תצוגה מאוחדת ונקייה ללא כפילויות)
+HQOp -> WebClient: לחיצה על "אשר בקשה" (Approve Request)
+WebClient -> Relay: שליחת WebSocket (REVIEW_FLIGHT_REQUEST, status: APPROVED)
+
+Relay -> DB: עדכון הסטטוס ל-APPROVED בקובץ הנתונים
+activate DB
+DB --> Relay: אישור שמירה ב-JSON DB
+deactivate DB
+
+Relay -> AlarClient: שידור עדכון הסטטוס (REVIEW_FLIGHT_REQUEST, status: APPROVED)
+Relay -> WebClient: שידור עדכון הסטטוס לכל שאר מסכי המפקדה המחוברים
+
+== שלב ה': ריסום וציור הפוליגון במפה ==
+
+AlarClient -> AlarClient: עדכון הסטטוס ל-APPROVED בממשק המטיס
+WebClient -> WebClient: ציור הפוליגון המאושר במפה בצבע כחול חצי-שקוף
+
+note over AlarClient, WebClient
+  הפוליגון מאושר ומשורטט כעת לצמיתות (מוגן מפני רענון דפדפן בזכות ה-Relay DB).
+  בעת המראה (Takeoff), רחפן המטיס מתחיל לשדר טלמטריה
+  והמפקדה עוקבת אחריו בזמן אמת בתוך הפוליגון הכחול.
+end note
+
+@enduml

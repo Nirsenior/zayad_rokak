@@ -1,0 +1,21 @@
+<svg preserveAspectRatio="none" width="100%" height="100%" overflow="visible" style="display: block;" viewBox="0 0 34 34" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Rectangle 1472" filter="url(#filter0_d_1457_34116)">
+<path d="M2 6C2 3.79086 3.79086 2 6 2H28C30.2091 2 32 3.79086 32 6V28C32 30.2091 30.2091 32 28 32H6C3.79086 32 2 30.2091 2 28V6Z" fill="url(#paint0_linear_1457_34116)"/>
+</g>
+<defs>
+<filter id="filter0_d_1457_34116" x="0" y="0" width="34" height="34" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+<feOffset/>
+<feGaussianBlur stdDeviation="1"/>
+<feComposite in2="hardAlpha" operator="out"/>
+<feColorMatrix type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.8 0"/>
+<feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1457_34116"/>
+<feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1457_34116" result="shape"/>
+</filter>
+<linearGradient id="paint0_linear_1457_34116" x1="17" y1="2" x2="17" y2="32" gradientUnits="userSpaceOnUse">
+<stop stop-color="#676B72"/>
+<stop offset="1" stop-color="#4F5259"/>
+</linearGradient>
+</defs>
+</svg>

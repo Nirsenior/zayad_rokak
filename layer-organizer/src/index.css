@@ -1,0 +1,68 @@
+@import './styles/tokens.css';
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  direction: rtl;
+  background: var(--ds-bg-app);
+  font-family: var(--ds-font);
+}
+
+#root {
+  height: 100%;
+}
+
+/* custom scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: #040c18;
+}
+::-webkit-scrollbar-thumb {
+  background: #1a3050;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #1e4060;
+}
+
+/* User settings panel — native select matches dark fields */
+.user-settings-panel select {
+  color: #fff;
+  background-color: transparent;
+  color-scheme: dark;
+}
+
+.user-settings-panel select option {
+  background: #343944;
+  color: #fff;
+}
+
+/* Mission Plan dropdown — סרגל כהה, בלי פס כחול */
+.mission-plan-dropdown {
+  scrollbar-color: #343944 transparent;
+  scrollbar-width: thin;
+}
+
+.mission-plan-dropdown::-webkit-scrollbar {
+  width: 4px;
+}
+
+.mission-plan-dropdown::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.mission-plan-dropdown::-webkit-scrollbar-thumb {
+  background: #343944;
+  border-radius: 2px;
+}
+
+.mission-plan-dropdown::-webkit-scrollbar-thumb:hover {
+  background: #4a5060;
+}
