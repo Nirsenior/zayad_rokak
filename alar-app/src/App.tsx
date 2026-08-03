@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { MapContainer, TileLayer, Marker, Polygon, Polyline, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { Map as MapIcon, ClipboardList, Wifi, MapPin, Battery, AlertTriangle, AlertOctagon, Bell, User, CheckCircle, Clock } from "lucide-react";
+import { Map as MapIcon, ClipboardList, Wifi, MapPin, Battery, AlertTriangle, AlertOctagon, Bell, User, CheckCircle, Clock, Cpu } from "lucide-react";
 
 
 // CSS Custom Styles to embed directly for clean operation
@@ -66,6 +66,13 @@ interface FlightRequest {
   id: string;
   operatorName: string;
   unit: string;
+  division?: string;
+  brigade?: string;
+  battalion?: string;
+  team?: string;
+  radioCallSign?: string;
+  phone?: string;
+  phoneSecondary?: string;
   droneModel: string;
   frequencies: number[];
   timeWindow: string;
@@ -74,7 +81,7 @@ interface FlightRequest {
   maxAlt: number;
   conflicts: any[];
   notes: string;
-  status: "PENDING_REVIEW" | "APPROVED" | "REJECTED";
+  status: "PENDING_REVIEW" | "APPROVED" | "ACTIVE" | "REJECTED" | "EXPIRED" | "COMPLETED";
   reviewerNotes?: string;
   isArmed?: boolean;
   operatorLocation?: { lat: number; lng: number };
@@ -82,9 +89,18 @@ interface FlightRequest {
   polygonName?: string;
   operatorNotes?: string;
   customPolygonPoints?: [number, number][];
+  crossesBorder?: boolean;
+  takeoffPoint?: string;
+  specialFeatures?: string;
+  missionType?: string;
+  comms?: string;
   tailNumber?: string;
+  serialNumber?: string;
+  nightCapable?: boolean;
   devices?: string;
   droneUniqueName?: string;
+  droneLogs?: { droneModel: string; action: string; timestamp: string }[];
+  additionalDrones?: { droneModel: string; tailNumber: string; serialNumber: string; nightCapable: boolean; devices: string; name: string }[];
 }
 
 // Custom Leaflet Icons using DivIcon for perfect loading without asset dependency
@@ -248,13 +264,13 @@ interface DroneState {
 
 // Drone Preset Registry
 const dronePresets = [
-  { model: "DJI Mavic 3 Pro", freq: [5.8] },
-  { model: "DJI Matrice 300 RTK", freq: [5.8, 2.4] },
-  { model: "Skydio X2D", freq: [1.8] }
+  { model: "EVO 4T", freq: [5.8, 2.4] },
+  { model: "EVO Alfa", freq: [5.8, 2.4] },
+  { model: "EVO Night", freq: [2.4] }
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<"MAP" | "FORM" | "ALERTS" | "PROFILE">("MAP");
+  const [activeTab, setActiveTab] = useState<"MAP" | "FORM" | "ALERTS" | "DRONES" | "PROFILE">("MAP");
   const [wsConnected, setWsConnected] = useState(false);
   const [gpsLocked] = useState(true);
   const [allRequests, setAllRequests] = useState<FlightRequest[]>([]);
@@ -262,7 +278,6 @@ export default function App() {
   // Custom polygon drawing
   const [showPolygonDrawer, setShowPolygonDrawer] = useState(false);
   const [customPolygonPoints, setCustomPolygonPoints] = useState<[number, number][]>([]);
-  const [useAlternativeFreq, setUseAlternativeFreq] = useState(false);
   const [activeAlert, setActiveAlert] = useState<string | null>(null);
   const [activeTigerRequestIds, setActiveTigerRequestIds] = useState<string[]>([]);
   const [tigerRefusalReason, setTigerRefusalReason] = useState("");
@@ -315,6 +330,15 @@ export default function App() {
   const [operatorName, setOperatorName] = useState("סמל רועי שרון");
   const [operatorUnit, setOperatorUnit] = useState("גדוד 12");
 
+  // Force details (פרטי הכח)
+  const [operatorDivision, setOperatorDivision] = useState("99");
+  const [operatorBrigade, setOperatorBrigade] = useState("88");
+  const [operatorBattalion, setOperatorBattalion] = useState("גדוד 12");
+  const [operatorTeam, setOperatorTeam] = useState("");
+  const [operatorRadioCallSign, setOperatorRadioCallSign] = useState("אפה");
+  const [operatorPhone, setOperatorPhone] = useState("0509998881");
+  const [operatorPhoneSecondary, setOperatorPhoneSecondary] = useState("050666891");
+
   const operatorNameRef = useRef(operatorName);
   const operatorUnitRef = useRef(operatorUnit);
   const flightStatesRef = useRef(flightStates);
@@ -327,27 +351,26 @@ export default function App() {
     operatorUnitRef.current = operatorUnit;
   }, [operatorUnit]);
 
+  // Keep the unit label in sync with the detailed force hierarchy
+  useEffect(() => {
+    const parts = [operatorDivision, operatorBrigade, operatorBattalion, operatorTeam].filter(Boolean);
+    if (parts.length > 0) setOperatorUnit(parts.join(" / "));
+  }, [operatorDivision, operatorBrigade, operatorBattalion, operatorTeam]);
+
   useEffect(() => {
     flightStatesRef.current = flightStates;
   }, [flightStates]);
   const [operatorNotes, setOperatorNotes] = useState("");
   
   // Registered drones for this operator
-  const [myDrones, setMyDrones] = useState<any[]>([
-    {
-      id: "drone-rs12",
-      tailNumber: "T-RS12",
-      model: "DJI Mavic 3 Pro",
-      devices: "מצלמה תרמית, זום אופטי",
-      name: "צילום גזרתי",
-      status: "INACTIVE"
-    }
-  ]);
+  const [myDrones, setMyDrones] = useState<any[]>([]);
 
   // Fields for adding a drone
   const [newDroneName, setNewDroneName] = useState("");
   const [newDroneModelIdx, setNewDroneModelIdx] = useState(0);
   const [newDroneTail, setNewDroneTail] = useState("");
+  const [newDroneSerial, setNewDroneSerial] = useState("");
+  const [newDroneNightCapable, setNewDroneNightCapable] = useState(false);
   const [newDroneDevices, setNewDroneDevices] = useState("");
 
   const handleSaveAndSync = () => {
@@ -366,15 +389,41 @@ export default function App() {
     }
   };
 
-  const [selectedDroneIdx, setSelectedDroneIdx] = useState(0);
-  const activeRegisteredDrone = myDrones[selectedDroneIdx] || myDrones[0] || null;
-  const activeSelectedPreset = dronePresets.find(p => p.model === activeRegisteredDrone?.model) || dronePresets[0];
+  const [selectedDroneIndices, setSelectedDroneIndices] = useState<number[]>([0]);
+  const [editingRequestId, setEditingRequestId] = useState<string | null>(null);
   const [isArmed, setIsArmed] = useState(false);
   const [minAlt, setMinAlt] = useState(20);
   const [maxAlt, setMaxAlt] = useState(80);
-  const [timeWindow, setTimeWindow] = useState("14:15 - 14:45");
-  const [polygonSelectionType, setPolygonSelectionType] = useState<"PREDEFINED" | "CUSTOM">("PREDEFINED");
+  const [timeWindow, setTimeWindow] = useState(() => {
+    const fmt = (d: Date) => `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    const now = new Date();
+    const start = new Date(now.getTime() + 15 * 60000);
+    const end = new Date(now.getTime() + 45 * 60000);
+    return `${fmt(start)} - ${fmt(end)}`;
+  });
+  const [polygonSelectionType, setPolygonSelectionType] = useState<"PREDEFINED" | "CUSTOM">("CUSTOM");
   const [selectedPredefinedPolygon, setSelectedPredefinedPolygon] = useState("מסדרון גדס''ר");
+
+  // Request-specific details
+  const [crossesBorder, setCrossesBorder] = useState(false);
+  const [takeoffPoint, setTakeoffPoint] = useState("");
+  const [specialFeatures, setSpecialFeatures] = useState("");
+  const [missionType, setMissionType] = useState("");
+  const [missionTypeOther, setMissionTypeOther] = useState("");
+  const [comms, setComms] = useState("");
+  const [commsFreqValue, setCommsFreqValue] = useState("");
+  const [commsOther, setCommsOther] = useState("");
+
+  const missionTypeOptions = ["איסוף", "אבטחת כח", "סריקת גבול", "תרגיל", "חילוץ", "מדידה", "תצפית", "התאבדות", "אחר"];
+  const commsOptions = ["תדר", "וועידה", "ללא", "אחר"];
+
+  const isProfileComplete = !!(
+    operatorName.trim() &&
+    operatorBrigade.trim() &&
+    operatorBattalion.trim() &&
+    operatorRadioCallSign.trim() &&
+    operatorPhone.trim()
+  );
 
   const updateTelemetry = (reqId: string, updates: any) => {
     setFlightStates((prev) => {
@@ -391,7 +440,7 @@ export default function App() {
         updatedDrones = [
           {
             id: reqId.replace("req", "flight"),
-            droneModel: req?.droneModel || "DJI Mavic 3 Pro",
+            droneModel: req?.droneModel || "EVO 4T",
             status: "APPROVED",
             transponderActive: false,
             battery: 100,
@@ -446,6 +495,41 @@ export default function App() {
 
   const socketRef = useRef<WebSocket | null>(null);
   const isSubmittingRef = useRef<boolean>(false);
+  const alertedRequestsRef = useRef<Set<string>>(new Set());
+
+  const parseTimeWindow = (windowStr: string) => {
+    const parts = windowStr.split("-").map(p => p.trim());
+    if (parts.length !== 2) return { startMinutes: 0, endMinutes: 1440 };
+    const parseTime = (t: string) => {
+      const [h, m] = t.split(":").map(Number);
+      return (isNaN(h) ? 0 : h) * 60 + (isNaN(m) ? 0 : m);
+    };
+    return { startMinutes: parseTime(parts[0]), endMinutes: parseTime(parts[1]) };
+  };
+
+  // Check if active or approved request time window is ending (within 5 minutes)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = new Date();
+      const currentMin = now.getHours() * 60 + now.getMinutes();
+
+      allRequests.forEach((req) => {
+        if (req.status === "ACTIVE" || req.status === "APPROVED") {
+          const time = parseTimeWindow(req.timeWindow);
+          const diff = time.endMinutes - currentMin;
+          if (diff > 0 && diff <= 5) {
+            const alertKey = `${req.id}-${time.endMinutes}`;
+            if (!alertedRequestsRef.current.has(alertKey)) {
+              alertedRequestsRef.current.add(alertKey);
+              setActiveAlert(`התרעה: חלון הזמן של הפעילות עומד להסתיים בעוד ${diff} דקות! מומלץ להגיש בקשת הארכה.`);
+            }
+          }
+        }
+      });
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [allRequests]);
 
   // Update device clock
   useEffect(() => {
@@ -485,27 +569,31 @@ export default function App() {
           console.log("Received WebSocket event:", message);
 
           if (message.type === "INITIAL_REQUESTS_LOAD") {
-            setAllRequests(message.requests);
+            setAllRequests(message.requests.filter((r: any) => r.status !== "REMOVE"));
           } else if (message.type === "REVIEW_FLIGHT_REQUEST") {
-            setAllRequests((prev) =>
-              prev.map((req) =>
-                req.id === message.requestId
-                  ? { ...req, status: message.status, reviewerNotes: message.reviewerNotes }
-                  : req
-              )
-            );
+            if (message.status === "REMOVE") {
+              setAllRequests((prev) => prev.filter((req) => req.id !== message.requestId));
+            } else {
+              setAllRequests((prev) =>
+                prev.map((req) =>
+                  req.id === message.requestId
+                    ? { ...req, status: message.status, reviewerNotes: message.reviewerNotes }
+                    : req
+                )
+              );
+            }
 
             const latestSelectedId = selectedRequestForMapIdRef.current;
             if (latestSelectedId === message.requestId) {
-              if (message.status === "APPROVED") {
-                updateTelemetry(message.requestId, { status: "APPROVED" });
+              if (message.status === "APPROVED" || message.status === "ACTIVE") {
+                updateTelemetry(message.requestId, { status: message.status });
               }
             }
           } else if (message.type === "CRITICAL_ALERT") {
             if (message.alertType === "TIGER" && message.threatLocation) {
               const affectedReqIds: string[] = [];
               allRequestsRef.current.forEach((req) => {
-                if (req.status === "APPROVED") {
+                if (req.status === "APPROVED" || req.status === "ACTIVE") {
                   const activePolygon = getRequestGeometry(req);
                   if (activePolygon && activePolygon.length > 0) {
                     const isInside = isPointInPolygon(
@@ -542,7 +630,7 @@ export default function App() {
                   const drones = current?.drones || [
                     {
                       id: reqId.replace("req", "flight"),
-                      droneModel: req?.droneModel || "DJI Mavic 3 Pro"
+                      droneModel: req?.droneModel || "EVO 4T"
                     }
                   ];
                   drones.forEach((drone: any) => {
@@ -612,7 +700,7 @@ export default function App() {
   // Initialize flightStates for newly approved requests
   useEffect(() => {
     allRequests.forEach((req) => {
-      if (req.status === "APPROVED" && !flightStates[req.id]) {
+      if ((req.status === "APPROVED" || req.status === "ACTIVE") && !flightStates[req.id]) {
         setFlightStates((prev) => ({
           ...prev,
           [req.id]: {
@@ -635,7 +723,7 @@ export default function App() {
     const interval = setInterval(() => {
       allRequests.forEach((req) => {
         const tel = flightStates[req.id];
-        if (req.status === "APPROVED" && tel && tel.drones && wsConnected) {
+        if ((req.status === "APPROVED" || req.status === "ACTIVE") && tel && tel.drones && wsConnected) {
           tel.drones.forEach((drone: DroneState, idx: number) => {
             if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
               socketRef.current.send(JSON.stringify({
@@ -659,7 +747,7 @@ export default function App() {
     const interval = setInterval(() => {
       allRequests.forEach((req) => {
         const tel = flightStates[req.id];
-        if (req.status === "APPROVED" && tel && tel.drones && tel.drones.length > 0) {
+        if ((req.status === "APPROVED" || req.status === "ACTIVE") && tel && tel.drones && tel.drones.length > 0) {
           // Circular trajectory center based on request polygon center
           let centerLat = 33.232;
           let centerLng = 35.566;
@@ -752,56 +840,217 @@ export default function App() {
     return () => clearInterval(interval);
   }, [allRequests, flightStates]);
 
+  // Open form in edit mode, pre-filling all fields from an existing request
+  // Restore the request-detail fields (incl. free-text "other" fallbacks) when loading an existing request
+  const applyRequestDetailFields = (req: FlightRequest) => {
+    setCrossesBorder(req.crossesBorder || false);
+    setTakeoffPoint(req.takeoffPoint || "");
+    setSpecialFeatures(req.specialFeatures || "");
+
+    if (req.missionType && missionTypeOptions.includes(req.missionType)) {
+      setMissionType(req.missionType);
+      setMissionTypeOther("");
+    } else if (req.missionType) {
+      setMissionType("אחר");
+      setMissionTypeOther(req.missionType);
+    } else {
+      setMissionType("");
+      setMissionTypeOther("");
+    }
+
+    if (req.comms?.startsWith("תדר")) {
+      setComms("תדר");
+      setCommsFreqValue(req.comms.replace(/^תדר\s*-?\s*/, ""));
+      setCommsOther("");
+    } else if (req.comms && commsOptions.includes(req.comms)) {
+      setComms(req.comms);
+      setCommsFreqValue("");
+      setCommsOther("");
+    } else if (req.comms) {
+      setComms("אחר");
+      setCommsOther(req.comms);
+      setCommsFreqValue("");
+    } else {
+      setComms("");
+      setCommsFreqValue("");
+      setCommsOther("");
+    }
+  };
+
+  const openEditForm = (req: FlightRequest) => {
+    setEditingRequestId(req.id);
+    setOperatorNotes(req.operatorNotes || req.notes || "");
+    setMinAlt(req.minAlt);
+    setMaxAlt(req.maxAlt);
+    setTimeWindow(req.timeWindow);
+    setIsArmed(req.isArmed || false);
+    applyRequestDetailFields(req);
+    setPolygonSelectionType(req.polygonType || "PREDEFINED");
+    if (req.polygonType === "CUSTOM" && req.customPolygonPoints) {
+      setCustomPolygonPoints(req.customPolygonPoints);
+    } else {
+      setCustomPolygonPoints([]);
+      setSelectedPredefinedPolygon(req.polygonName || "מסדרון גדס''ר");
+    }
+    // Match registered drones to those in the request
+    const indices: number[] = [];
+    if (req.additionalDrones && req.additionalDrones.length > 0) {
+      req.additionalDrones.forEach((ad) => {
+        const idx = myDrones.findIndex(d => d.tailNumber === ad.tailNumber);
+        if (idx !== -1) indices.push(idx);
+      });
+    }
+    if (indices.length === 0) {
+      const idx = myDrones.findIndex(d => d.tailNumber === req.tailNumber);
+      indices.push(idx !== -1 ? idx : 0);
+    }
+    setSelectedDroneIndices(indices);
+    setShowNewRequestForm(true);
+    setActiveTab("FORM");
+  };
+
   const handleSubmit = () => {
+    if (!isProfileComplete) {
+      alert("יש להשלים תחילה את פרטי המפעיל והכח בלשונית «פרופיל»");
+      return;
+    }
     if (isSubmittingRef.current) return;
     isSubmittingRef.current = true;
-    setTimeout(() => {
-      isSubmittingRef.current = false;
-    }, 1000);
+    setTimeout(() => { isSubmittingRef.current = false; }, 1000);
 
-    const registeredDrone = myDrones[selectedDroneIdx] || null;
-    const dronePreset = dronePresets.find(p => p.model === registeredDrone?.model) || dronePresets[0];
-    const droneModel = registeredDrone ? registeredDrone.model : dronePreset.model;
-    const tailNumber = registeredDrone ? registeredDrone.tailNumber : "T-UNKNOWN";
-    const devices = registeredDrone ? registeredDrone.devices : "ללא";
-    const droneUniqueName = registeredDrone ? registeredDrone.name : "רחפן לא רשום";
+    const finalMissionType = missionType === "אחר" ? (missionTypeOther.trim() || "אחר") : missionType;
+    const finalComms = comms === "תדר"
+      ? `תדר${commsFreqValue.trim() ? ` - ${commsFreqValue.trim()}` : ""}`
+      : comms === "אחר" ? (commsOther.trim() || "אחר") : comms;
 
+    // Build drones list from selectedDroneIndices
+    const chosenDrones = selectedDroneIndices
+      .map(i => myDrones[i])
+      .filter(Boolean);
+    const primaryDroneReg = chosenDrones[0] || myDrones[0] || null;
+    const dronePreset = dronePresets.find(p => p.model === primaryDroneReg?.model) || dronePresets[0];
+    const droneModel = primaryDroneReg ? primaryDroneReg.model : dronePreset.model;
+    const tailNumber = primaryDroneReg ? primaryDroneReg.tailNumber : "T-UNKNOWN";
+    const serialNumber = primaryDroneReg ? primaryDroneReg.serialNumber : "לא הוגדר";
+    const nightCapable = primaryDroneReg ? !!primaryDroneReg.nightCapable : false;
+    const devices = primaryDroneReg ? primaryDroneReg.devices : "ללא";
+    const droneUniqueName = primaryDroneReg ? primaryDroneReg.name : "רחפן לא רשום";
+    const additionalDrones = chosenDrones.map(d => ({
+      droneModel: d.model,
+      tailNumber: d.tailNumber,
+      serialNumber: d.serialNumber,
+      nightCapable: !!d.nightCapable,
+      devices: d.devices,
+      name: d.name,
+    }));
+
+    if (editingRequestId) {
+      // ── EDIT MODE ──────────────────────────────────────────────
+      const updatedReq: FlightRequest = {
+        ...allRequests.find(r => r.id === editingRequestId)!,
+        operatorName,
+        unit: operatorUnit,
+        division: operatorDivision,
+        brigade: operatorBrigade,
+        battalion: operatorBattalion,
+        team: operatorTeam,
+        radioCallSign: operatorRadioCallSign,
+        phone: operatorPhone,
+        phoneSecondary: operatorPhoneSecondary,
+        droneModel,
+        frequencies: dronePreset.freq,
+        timeWindow,
+        minAlt: Number(minAlt),
+        maxAlt: Number(maxAlt),
+        isArmed,
+        operatorLocation: { lat: 33.232, lng: 35.566 },
+        polygonType: polygonSelectionType,
+        polygonName: polygonSelectionType === "PREDEFINED" ? selectedPredefinedPolygon : "פוליגון מותאם אישית (משורטט)",
+        operatorNotes,
+        notes: operatorNotes || `טיסת ${droneUniqueName} (${droneModel}) - תיאום מרחבי`,
+        customPolygonPoints: polygonSelectionType === "CUSTOM" ? customPolygonPoints : undefined,
+        crossesBorder,
+        takeoffPoint,
+        specialFeatures,
+        missionType: finalMissionType,
+        comms: finalComms,
+        tailNumber,
+        serialNumber,
+        nightCapable,
+        devices,
+        droneUniqueName,
+        additionalDrones,
+        status: "PENDING_REVIEW", // always back to pending after operator edit
+        conflicts: [],
+        classification: "GREEN",
+        reviewerNotes: "",
+      };
+
+      setAllRequests(prev => prev.map(r => r.id === editingRequestId ? updatedReq : r));
+
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({
+          type: "UPDATE_FLIGHT_REQUEST",
+          request: updatedReq,
+        }));
+      }
+
+      setEditingRequestId(null);
+      setShowNewRequestForm(false);
+      setActiveTab("FORM");
+      return;
+    }
+
+    // ── NEW REQUEST MODE ────────────────────────────────────────
     const newId = `req-${Math.floor(1000 + Math.random() * 9000)}`;
     const newReq: FlightRequest = {
       id: newId,
-      operatorName: operatorName,
+      operatorName,
       unit: operatorUnit,
-      droneModel: droneModel,
-      frequencies: useAlternativeFreq ? [2.4] : dronePreset.freq,
-      timeWindow: timeWindow,
-      classification: "GREEN", // Server / HQ will perform conflict checks and reclassify
+      division: operatorDivision,
+      brigade: operatorBrigade,
+      battalion: operatorBattalion,
+      team: operatorTeam,
+      radioCallSign: operatorRadioCallSign,
+      phone: operatorPhone,
+      phoneSecondary: operatorPhoneSecondary,
+      droneModel,
+      frequencies: dronePreset.freq,
+      timeWindow,
+      classification: "GREEN",
       minAlt: Number(minAlt),
       maxAlt: Number(maxAlt),
       conflicts: [],
       notes: operatorNotes || `טיסת ${droneUniqueName} (${droneModel}) - תיאום מרחבי`,
       status: "PENDING_REVIEW",
-      isArmed: isArmed,
+      isArmed,
       operatorLocation: { lat: 33.232, lng: 35.566 },
       polygonType: polygonSelectionType,
       polygonName: polygonSelectionType === "PREDEFINED" ? selectedPredefinedPolygon : "פוליגון מותאם אישית (משורטט)",
-      operatorNotes: operatorNotes,
+      operatorNotes,
       customPolygonPoints: polygonSelectionType === "CUSTOM" ? customPolygonPoints : undefined,
-      tailNumber: tailNumber,
-      devices: devices,
-      droneUniqueName: droneUniqueName,
+      crossesBorder,
+      takeoffPoint,
+      specialFeatures,
+      missionType: finalMissionType,
+      comms: finalComms,
+      tailNumber,
+      serialNumber,
+      nightCapable,
+      devices,
+      droneUniqueName,
+      additionalDrones,
     };
 
     setAllRequests(prev => [newReq, ...prev]);
     setSelectedRequestForMapId(newId);
     updateTelemetry(newId, { status: "APPROVED", timeLeft: 60 });
 
-    // Send via WebSocket to HQ Web Console
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify({
         type: "NEW_FLIGHT_REQUEST",
-        request: newReq
+        request: newReq,
       }));
-      console.log("Sent request to HQ Console:", newReq);
     }
 
     setShowNewRequestForm(false);
@@ -811,25 +1060,72 @@ export default function App() {
   const handleTakeoff = (droneId: string) => {
     if (!selectedRequestForMapId) return;
     updateDroneTelemetry(selectedRequestForMapId, droneId, { status: "FLYING", transponderActive: true });
+
+    setAllRequests((prev) =>
+      prev.map((r) => {
+        if (r.id === selectedRequestForMapId) {
+          const timestamp = new Date().toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+          const newLog = { droneModel: r.droneModel, action: "המראה", timestamp };
+          const updatedLogs = [...(r.droneLogs || []), newLog];
+          const updatedReq = { ...r, status: "ACTIVE" as const, droneLogs: updatedLogs };
+          
+          if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+            socketRef.current.send(JSON.stringify({
+              type: "REVIEW_FLIGHT_REQUEST",
+              requestId: selectedRequestForMapId,
+              status: "ACTIVE",
+              droneLogs: updatedLogs
+            }));
+          }
+          return updatedReq;
+        }
+        return r;
+      })
+    );
   };
 
   const handleLand = (droneId: string) => {
     if (!selectedRequestForMapId) return;
     updateDroneTelemetry(selectedRequestForMapId, droneId, { status: "LANDED", transponderActive: false });
     
-    // Notify HQ that flight has landed
-    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify({
-        type: "FLIGHT_LANDED",
-        flightId: droneId
-      }));
-    }
+    setAllRequests((prev) =>
+      prev.map((r) => {
+        if (r.id === selectedRequestForMapId) {
+          const timestamp = new Date().toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+          const newLog = { droneModel: r.droneModel, action: "נחיתה", timestamp };
+          const updatedLogs = [...(r.droneLogs || []), newLog];
+          const updatedReq = { ...r, status: "COMPLETED" as const, droneLogs: updatedLogs };
+          
+          if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+            socketRef.current.send(JSON.stringify({
+              type: "REVIEW_FLIGHT_REQUEST",
+              requestId: selectedRequestForMapId,
+              status: "COMPLETED",
+              droneLogs: updatedLogs
+            }));
+            socketRef.current.send(JSON.stringify({
+              type: "FLIGHT_LANDED",
+              flightId: droneId
+            }));
+          }
+          return updatedReq;
+        }
+        return r;
+      })
+    );
   };
 
   const handleHotSwap = (droneId: string, presetIdx: number) => {
     if (!selectedRequestForMapId) return;
     const newPreset = dronePresets[presetIdx];
     
+    let prevModel = "רחפן";
+    const currentFlightState = flightStates[selectedRequestForMapId];
+    if (currentFlightState && currentFlightState.drones) {
+      const d = currentFlightState.drones.find((d: any) => d.id === droneId);
+      if (d) prevModel = d.droneModel;
+    }
+
     setFlightStates((prev) => {
       const requestState = prev[selectedRequestForMapId];
       if (!requestState) return prev;
@@ -850,6 +1146,32 @@ export default function App() {
         }
       };
     });
+
+    setAllRequests((prev) =>
+      prev.map((r) => {
+        if (r.id === selectedRequestForMapId) {
+          const timestamp = new Date().toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+          const newLog = { 
+            droneModel: newPreset.model, 
+            action: `החלפה מ-${prevModel} ל-${newPreset.model}`, 
+            timestamp 
+          };
+          const updatedLogs = [...(r.droneLogs || []), newLog];
+          const updatedReq = { ...r, droneLogs: updatedLogs };
+          
+          if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+            socketRef.current.send(JSON.stringify({
+              type: "REVIEW_FLIGHT_REQUEST",
+              requestId: selectedRequestForMapId,
+              status: r.status,
+              droneLogs: updatedLogs
+            }));
+          }
+          return updatedReq;
+        }
+        return r;
+      })
+    );
 
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify({
@@ -961,6 +1283,34 @@ export default function App() {
     setSelectedRequestForMapId(null);
   };
 
+  const handleExtendRequest = (req: FlightRequest) => {
+    setOperatorNotes(req.operatorNotes || req.notes);
+    setMinAlt(req.minAlt);
+    setMaxAlt(req.maxAlt);
+    applyRequestDetailFields(req);
+
+    const time = parseTimeWindow(req.timeWindow);
+    const extendStartMin = time.endMinutes;
+    const extendEndMin = extendStartMin + 30;
+    
+    const formatTime = (minutes: number) => {
+      const h = Math.floor(minutes / 60) % 24;
+      const m = minutes % 60;
+      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+    };
+    
+    setTimeWindow(`${formatTime(extendStartMin)} - ${formatTime(extendEndMin)}`);
+    setPolygonSelectionType(req.polygonType || "PREDEFINED");
+    if (req.polygonType === "CUSTOM" && req.customPolygonPoints) {
+      setCustomPolygonPoints(req.customPolygonPoints);
+    } else if (req.polygonName) {
+      setSelectedPredefinedPolygon(req.polygonName);
+    }
+    
+    setShowNewRequestForm(true);
+    setActiveTab("FORM");
+  };
+
   const handleTigerResponse = (status: "EXECUTED" | "CANNOT_EXECUTE") => {
     if (activeTigerRequestIds.length === 0) {
       setActiveAlert(null);
@@ -1032,7 +1382,7 @@ export default function App() {
         const drones = current?.drones || [
           {
             id: reqId.replace("req", "flight"),
-            droneModel: req?.droneModel || "DJI Mavic 3 Pro"
+            droneModel: req?.droneModel || "EVO 4T"
           }
         ];
         drones.forEach((drone: DroneState) => {
@@ -1098,7 +1448,201 @@ export default function App() {
 
         {/* Main App Content Area */}
         <div style={styles.appContentArea}>
-          {activeTab === "ALERTS" ? (
+          {activeTab === "DRONES" ? (
+            /* Drone Registry Screen */
+            <div style={styles.formContainer}>
+              <div style={{ padding: "0 2px" }}>
+                <h3 style={{ ...styles.formTitle, marginBottom: "14px", display: "flex", alignItems: "center", gap: "8px" }}>
+                  <Cpu size={16} color="#3498db" /> מאגר הרחפנים שלי
+                </h3>
+
+                {/* Drone list */}
+                {myDrones.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "24px 16px", color: "#7f8c8d", backgroundColor: "#1b1b21", borderRadius: "8px", border: "1px solid #2a2a35", marginBottom: "12px" }}>
+                    <Cpu size={28} color="#2a2a35" style={{ marginBottom: "8px" }} />
+                    <p style={{ fontSize: "11px", margin: 0 }}>אין רחפנים רשומים במאגר.</p>
+                  </div>
+                ) : (
+                  <div style={{ marginBottom: "12px" }}>
+                    {myDrones.map((drone, idx) => (
+                      <div key={drone.id || idx} style={{
+                        backgroundColor: "#1b1b21",
+                        border: "1px solid #2a2a35",
+                        borderRadius: "8px",
+                        padding: "10px 12px",
+                        marginBottom: "8px",
+                      }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "3px" }}>
+                              <Cpu size={12} color="#7f8c8d" />
+                              <strong style={{ fontSize: "12px", color: "#bdc3c7", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{drone.name}</strong>
+                            </div>
+                            <span style={{ fontSize: "10px", color: "#3498db", display: "block" }}>{drone.model}</span>
+                            <span style={{ fontSize: "9px", color: "#7f8c8d", display: "block", marginTop: "1px" }}>זנב: {drone.tailNumber} | סיריאלי: {drone.serialNumber || "לא הוגדר"}</span>
+                            <span style={{ fontSize: "9px", color: "#7f8c8d", display: "block", marginTop: "1px" }}>
+                              {drone.nightCapable && <span style={{ color: "#3498db" }}>לילה: כן</span>}
+                              {drone.nightCapable && " | "}
+                              התקנים: {drone.devices}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setMyDrones(prev => prev.filter((_, i) => i !== idx));
+                              setSelectedDroneIndices(prev => prev.filter(i => i !== idx).map(i => i > idx ? i - 1 : i));
+                            }}
+                            style={{
+                              background: "none",
+                              border: "1px solid rgba(231,76,60,0.3)",
+                              color: "#e74c3c",
+                              cursor: "pointer",
+                              fontSize: "9px",
+                              padding: "3px 7px",
+                              borderRadius: "4px",
+                              backgroundColor: "rgba(231,76,60,0.08)",
+                              flexShrink: 0,
+                              marginRight: "4px"
+                            }}
+                          >
+                            מחק
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Divider */}
+                <div style={{ borderTop: "1px solid #2a2a35", marginBottom: "14px" }} />
+
+                {/* Registration form */}
+                <div style={{ backgroundColor: "#1b1b21", border: "1px solid #2a2a35", borderRadius: "8px", padding: "12px", marginBottom: "10px" }}>
+                  <span style={{ fontSize: "10px", color: "#3498db", display: "flex", alignItems: "center", gap: "5px", marginBottom: "10px", fontWeight: "bold" }}>
+                    <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#3498db", display: "inline-block" }} />
+                    רישום רחפן חדש
+                  </span>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "9px" }}>
+                    <div>
+                      <label style={{ fontSize: "10px", color: "#bdc3c7", display: "block", marginBottom: "4px" }}>שם ייחודי (למטיס):</label>
+                      <input type="text" value={newDroneName} onChange={(e) => setNewDroneName(e.target.value)} placeholder="לדוגמה: עין הנשר 1" style={styles.formInput} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: "10px", color: "#bdc3c7", display: "block", marginBottom: "4px" }}>סוג רחפן:</label>
+                      <select value={newDroneModelIdx} onChange={(e) => setNewDroneModelIdx(Number(e.target.value))} style={styles.formSelect}>
+                        {dronePresets.map((d, i) => <option key={i} value={i}>{d.model}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: "10px", color: "#bdc3c7", display: "block", marginBottom: "4px" }}>מס״ד רחפן (מספר זנב):</label>
+                      <input type="text" value={newDroneTail} onChange={(e) => setNewDroneTail(e.target.value)} placeholder="לדוגמה: T-RS88" style={styles.formInput} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: "10px", color: "#bdc3c7", display: "block", marginBottom: "4px" }}>מספר סיריאלי:</label>
+                      <input type="text" value={newDroneSerial} onChange={(e) => setNewDroneSerial(e.target.value)} placeholder="לדוגמה: SN-2245891" style={styles.formInput} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: "10px", color: "#bdc3c7", display: "block", marginBottom: "4px" }}>לילה:</label>
+                      <label style={styles.checkboxContainerStyle}>
+                        <input type="checkbox" checked={newDroneNightCapable} onChange={(e) => setNewDroneNightCapable(e.target.checked)} style={styles.checkboxInput} />
+                        <span style={{ fontSize: "11px", color: newDroneNightCapable ? "#3498db" : "#bdc3c7" }}>
+                          {newDroneNightCapable ? "כן" : "לא"}
+                        </span>
+                      </label>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: "10px", color: "#bdc3c7", display: "block", marginBottom: "4px" }}>התקנים:</label>
+                      <input type="text" value={newDroneDevices} onChange={(e) => setNewDroneDevices(e.target.value)} placeholder="לדוגמה: רמקול כריזה, זרקור" style={styles.formInput} />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!newDroneName.trim() || !newDroneTail.trim()) {
+                          alert("נא למלא שם רחפן ומספר זנב");
+                          return;
+                        }
+                        const newDrone = {
+                          id: `drone-${Math.floor(1000 + Math.random() * 9000)}`,
+                          tailNumber: newDroneTail,
+                          serialNumber: newDroneSerial || "לא הוגדר",
+                          nightCapable: newDroneNightCapable,
+                          model: dronePresets[newDroneModelIdx].model,
+                          devices: newDroneDevices || "ללא",
+                          name: newDroneName,
+                          status: "INACTIVE"
+                        };
+                        setMyDrones(prev => [...prev, newDrone]);
+                        setNewDroneName("");
+                        setNewDroneTail("");
+                        setNewDroneSerial("");
+                        setNewDroneNightCapable(false);
+                        setNewDroneDevices("");
+                        if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+                          socketRef.current.send(JSON.stringify({
+                            type: "REGISTER_OPERATOR",
+                            operator: { name: operatorName, unit: operatorUnit, drones: [...myDrones, newDrone] }
+                          }));
+                        }
+                      }}
+                      style={{
+                        backgroundColor: "#1e3a5f",
+                        color: "#3498db",
+                        border: "1px solid rgba(52,152,219,0.5)",
+                        padding: "9px",
+                        borderRadius: "6px",
+                        cursor: "pointer",
+                        fontWeight: "bold",
+                        fontSize: "12px",
+                        width: "100%",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "6px"
+                      }}
+                    >
+                      <Cpu size={13} /> רשום רחפן ✓
+                    </button>
+                  </div>
+                </div>
+
+                {/* Sync to HQ button */}
+                {myDrones.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+                        socketRef.current.send(JSON.stringify({
+                          type: "REGISTER_OPERATOR",
+                          operator: { name: operatorName, unit: operatorUnit, drones: myDrones }
+                        }));
+                        alert(`סונכרנו ${myDrones.length} רחפנים עם החמ"ק בהצלחה!`);
+                      } else {
+                        alert("אין חיבור פעיל לשרת.");
+                      }
+                    }}
+                    style={{
+                      backgroundColor: "rgba(46,204,113,0.1)",
+                      color: "#2ecc71",
+                      border: "1px solid rgba(46,204,113,0.4)",
+                      padding: "9px",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      fontWeight: "bold",
+                      fontSize: "11px",
+                      width: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "6px"
+                    }}
+                  >
+                    ⬆ סנכרן עם החמ"ק ({myDrones.length} רחפנים)
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : activeTab === "ALERTS" ? (
             /* Alerts Screen */
             <div style={styles.formContainer}>
               <div style={{ padding: "0 2px" }}>
@@ -1166,108 +1710,74 @@ export default function App() {
                     <label style={{ fontSize: "10px", color: "#bdc3c7", display: "block", marginBottom: "4px" }}>שם מפעיל:</label>
                     <input type="text" value={operatorName} onChange={(e) => setOperatorName(e.target.value)} style={styles.formInput} />
                   </div>
-                  <div>
-                    <label style={{ fontSize: "10px", color: "#bdc3c7", display: "block", marginBottom: "4px" }}>יחידה/צוות:</label>
-                    <input type="text" value={operatorUnit} onChange={(e) => setOperatorUnit(e.target.value)} style={styles.formInput} />
-                  </div>
                 </div>
               </div>
 
-              {/* Drones Registry */}
+              {/* Force Details */}
               <div style={{ backgroundColor: "#1b1b21", border: "1px solid #2a2a35", borderRadius: "8px", padding: "10px 12px", marginBottom: "10px" }}>
-                <span style={{ fontSize: "10px", color: "#7f8c8d", display: "block", marginBottom: "8px", fontWeight: "bold" }}>מאגר הרחפנים שלי ({myDrones.length})</span>
-                {myDrones.length === 0 ? (
-                  <p style={{ fontSize: "11px", color: "#7f8c8d", margin: "5px 0" }}>אין רחפנים רשומים במאגר.</p>
-                ) : (
-                  myDrones.map((drone, idx) => (
-                    <div key={drone.id || idx} style={{ backgroundColor: "#1c222e", border: "1px solid #2a354a", borderRadius: "6px", padding: "8px", marginBottom: "6px" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                        <div>
-                          <strong style={{ fontSize: "11px", color: "#ecf0f1", display: "block" }}>{drone.name}</strong>
-                          <span style={{ fontSize: "10px", color: "#3498db", display: "block" }}>{drone.model} | זנב: {drone.tailNumber}</span>
-                          <span style={{ fontSize: "9px", color: "#7f8c8d", display: "block", marginTop: "2px" }}>התקנים: {drone.devices}</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setMyDrones(prev => prev.filter((_, i) => i !== idx));
-                          }}
-                          style={{
-                            background: "none",
-                            border: "none",
-                            color: "#e74c3c",
-                            cursor: "pointer",
-                            fontSize: "10px",
-                            padding: "2px 5px",
-                            borderRadius: "4px",
-                            backgroundColor: "rgba(231,76,60,0.12)"
-                          }}
-                        >
-                          מחק
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              {/* Add Drone Form */}
-              <div style={{ backgroundColor: "#1b1b21", border: "1px solid #2a2a35", borderRadius: "8px", padding: "10px 12px", marginBottom: "10px" }}>
-                <span style={{ fontSize: "10px", color: "#7f8c8d", display: "block", marginBottom: "8px", fontWeight: "bold" }}>הוספת רחפן חדש לרישום</span>
+                <span style={{ fontSize: "10px", color: "#7f8c8d", display: "block", marginBottom: "8px", fontWeight: "bold" }}>פרטי הכח</span>
                 <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                  <div>
-                    <label style={{ fontSize: "10px", color: "#bdc3c7", display: "block", marginBottom: "4px" }}>שם ייחודי (למטיס):</label>
-                    <input type="text" value={newDroneName} onChange={(e) => setNewDroneName(e.target.value)} placeholder="לדוגמה: עין הנשר 1" style={styles.formInput} />
+                  <div style={styles.formRow}>
+                    <div style={styles.formCol}>
+                      <label style={{ fontSize: "10px", color: "#bdc3c7", display: "block", marginBottom: "4px" }}>אוגדה:</label>
+                      <input type="text" value={operatorDivision} onChange={(e) => setOperatorDivision(e.target.value)} style={styles.formInput} />
+                    </div>
+                    <div style={styles.formCol}>
+                      <label style={{ fontSize: "10px", color: "#bdc3c7", display: "block", marginBottom: "4px" }}>חטיבה:</label>
+                      <input type="text" value={operatorBrigade} onChange={(e) => setOperatorBrigade(e.target.value)} style={styles.formInput} />
+                    </div>
+                  </div>
+                  <div style={styles.formRow}>
+                    <div style={styles.formCol}>
+                      <label style={{ fontSize: "10px", color: "#bdc3c7", display: "block", marginBottom: "4px" }}>גדוד:</label>
+                      <input type="text" value={operatorBattalion} onChange={(e) => setOperatorBattalion(e.target.value)} style={styles.formInput} />
+                    </div>
+                    <div style={styles.formCol}>
+                      <label style={{ fontSize: "10px", color: "#bdc3c7", display: "block", marginBottom: "4px" }}>מחלקה/צוות:</label>
+                      <input type="text" value={operatorTeam} onChange={(e) => setOperatorTeam(e.target.value)} style={styles.formInput} />
+                    </div>
                   </div>
                   <div>
-                    <label style={{ fontSize: "10px", color: "#bdc3c7", display: "block", marginBottom: "4px" }}>סוג/דגם:</label>
-                    <select value={newDroneModelIdx} onChange={(e) => setNewDroneModelIdx(Number(e.target.value))} style={styles.formSelect}>
-                      {dronePresets.map((d, i) => <option key={i} value={i}>{d.model}</option>)}
-                    </select>
+                    <label style={{ fontSize: "10px", color: "#bdc3c7", display: "block", marginBottom: "4px" }}>אוק בקשר:</label>
+                    <input type="text" value={operatorRadioCallSign} onChange={(e) => setOperatorRadioCallSign(e.target.value)} style={styles.formInput} />
                   </div>
-                  <div>
-                    <label style={{ fontSize: "10px", color: "#bdc3c7", display: "block", marginBottom: "4px" }}>מספר זנב:</label>
-                    <input type="text" value={newDroneTail} onChange={(e) => setNewDroneTail(e.target.value)} placeholder="לדוגמה: T-RS88" style={styles.formInput} />
+                  <div style={styles.formRow}>
+                    <div style={styles.formCol}>
+                      <label style={{ fontSize: "10px", color: "#bdc3c7", display: "block", marginBottom: "4px" }}>מספר טלפון:</label>
+                      <input type="tel" value={operatorPhone} onChange={(e) => setOperatorPhone(e.target.value)} style={styles.formInput} />
+                    </div>
+                    <div style={styles.formCol}>
+                      <label style={{ fontSize: "10px", color: "#bdc3c7", display: "block", marginBottom: "4px" }}>מספר טלפון משני:</label>
+                      <input type="tel" value={operatorPhoneSecondary} onChange={(e) => setOperatorPhoneSecondary(e.target.value)} style={styles.formInput} />
+                    </div>
                   </div>
-                  <div>
-                    <label style={{ fontSize: "10px", color: "#bdc3c7", display: "block", marginBottom: "4px" }}>התקנים מיוחדים:</label>
-                    <input type="text" value={newDroneDevices} onChange={(e) => setNewDroneDevices(e.target.value)} placeholder="לדוגמה: רמקול כריזה, זרקור" style={styles.formInput} />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!newDroneName.trim() || !newDroneTail.trim()) {
-                        alert("נא למלא שם רחפן ומספר זנב");
-                        return;
-                      }
-                      const newDrone = {
-                        id: `drone-${Math.floor(1000 + Math.random() * 9000)}`,
-                        tailNumber: newDroneTail,
-                        model: dronePresets[newDroneModelIdx].model,
-                        devices: newDroneDevices || "ללא",
-                        name: newDroneName,
-                        status: "INACTIVE"
-                      };
-                      setMyDrones(prev => [...prev, newDrone]);
-                      setNewDroneName("");
-                      setNewDroneTail("");
-                      setNewDroneDevices("");
-                    }}
-                    style={{
-                      backgroundColor: "#2e7d32",
-                      color: "#fff",
-                      border: "none",
-                      borderRadius: "4px",
-                      padding: "6px 10px",
-                      fontSize: "11px",
-                      fontWeight: "bold",
-                      cursor: "pointer",
-                      marginTop: "4px"
-                    }}
-                  >
-                    + הוסף למאגר הרשום
-                  </button>
                 </div>
+              </div>
+
+              {/* Drones Registry - moved to dedicated DRONES tab */}
+              <div style={{ backgroundColor: "rgba(52,152,219,0.08)", border: "1px solid rgba(52,152,219,0.25)", borderRadius: "8px", padding: "10px 12px", marginBottom: "10px" }}>
+                <span style={{ fontSize: "10px", color: "#7f8c8d", display: "block", marginBottom: "6px" }}>מאגר הרחפנים מנוהל בטאב הייעודי.</span>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("DRONES")}
+                  style={{
+                    backgroundColor: "rgba(52,152,219,0.15)",
+                    color: "#3498db",
+                    border: "1px solid rgba(52,152,219,0.4)",
+                    padding: "8px",
+                    borderRadius: "6px",
+                    cursor: "pointer",
+                    fontWeight: "bold",
+                    fontSize: "11px",
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "6px"
+                  }}
+                >
+                  <Cpu size={13} /> עבור למאגר הרחפנים ({myDrones.length})
+                </button>
               </div>
 
               {/* Save & Sync */}
@@ -1288,7 +1798,7 @@ export default function App() {
                     boxShadow: "0 2px 4px rgba(0,0,0,0.3)"
                   }}
                 >
-                  שמור וסנכרן עם הרוק"ק / חמ"ק
+                  שמור וסנכרן עם החטיבה
                 </button>
               </div>
 
@@ -1311,25 +1821,6 @@ export default function App() {
                   <span style={{ fontSize: "11px", color: "#bdc3c7" }}>סוללת מכשיר</span>
                   <span style={{ fontSize: "10px", fontWeight: "bold", color: battery > 30 ? "#2ecc71" : "#e74c3c" }}>
                     {battery}%
-                  </span>
-                </div>
-              </div>
-
-              {/* Drone info */}
-              <div style={{ backgroundColor: "#1b1b21", border: "1px solid #2a2a35", borderRadius: "8px", padding: "10px 12px", marginBottom: "10px" }}>
-                <span style={{ fontSize: "10px", color: "#7f8c8d", display: "block", marginBottom: "8px", fontWeight: "bold" }}>רחפן פעיל</span>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                  <span style={{ fontSize: "11px", color: "#bdc3c7" }}>דגם</span>
-                  <span style={{ fontSize: "11px", color: "#ecf0f1" }}>{currentRequest?.droneModel || "לא הוגדר"}</span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                  <span style={{ fontSize: "11px", color: "#bdc3c7" }}>מזהה בקשה</span>
-                  <span style={{ fontSize: "11px", color: "#ecf0f1" }}>{currentRequest?.id || "—"}</span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: "11px", color: "#bdc3c7" }}>מצב טיסה</span>
-                  <span style={{ fontSize: "11px", color: flightState === "FLYING" ? "#2ecc71" : "#f1c40f" }}>
-                    {flightState === "FLYING" ? "באוויר" : flightState === "LANDED" ? "מקורקע" : "מאושר"}
                   </span>
                 </div>
               </div>
@@ -1458,9 +1949,19 @@ export default function App() {
                       <strong style={{ fontSize: "12px" }}>מזהה: {currentRequest.id}</strong>
                       <span style={{ 
                         ...styles.statusBadge, 
-                        backgroundColor: currentRequest.status === "APPROVED" ? "#2ecc71" : currentRequest.status === "REJECTED" ? "#e74c3c" : "#e67e22" 
+                        backgroundColor: currentRequest.status === "APPROVED" ? "#2ecc71" 
+                          : currentRequest.status === "ACTIVE" ? "#1abc9c" 
+                          : currentRequest.status === "COMPLETED" ? "#34495e" 
+                          : currentRequest.status === "EXPIRED" ? "#95a5a6" 
+                          : currentRequest.status === "REJECTED" ? "#e74c3c" 
+                          : "#e67e22" 
                       }}>
-                        {currentRequest.status === "APPROVED" ? "מאושרת" : currentRequest.status === "REJECTED" ? "מבוטלת" : "ממתין לאישור"}
+                        {currentRequest.status === "APPROVED" ? "מאושרת" 
+                          : currentRequest.status === "ACTIVE" ? "פעילה" 
+                          : currentRequest.status === "COMPLETED" ? "הסתיימה" 
+                          : currentRequest.status === "EXPIRED" ? "פג תוקף" 
+                          : currentRequest.status === "REJECTED" ? "מבוטלת" 
+                          : "ממתין לאישור"}
                       </span>
                     </div>
                     
@@ -1472,7 +1973,7 @@ export default function App() {
 
                     {/* Flight Controls based on flightState */}
                     <div style={{ display: "flex", flexDirection: "column", gap: "8px", width: "100%" }}>
-                      {currentRequest.status === "APPROVED" && (
+                      {(currentRequest.status === "APPROVED" || currentRequest.status === "ACTIVE") && (
                         <div style={{ display: "flex", flexDirection: "column", width: "100%", gap: "8px" }}>
                           {/* Drones list inside this request */}
                           {currentDrones.length === 0 ? (
@@ -1578,6 +2079,22 @@ export default function App() {
                             >
                               סגור מרחב (סיום)
                             </button>
+
+                            <button 
+                              onClick={() => handleExtendRequest(currentRequest)}
+                              style={{ 
+                                backgroundColor: "#9b59b6", 
+                                color: "#fff", 
+                                border: "none", 
+                                borderRadius: "4px", 
+                                padding: "6px 8px", 
+                                fontSize: "10px", 
+                                fontWeight: "bold", 
+                                cursor: "pointer" 
+                              }}
+                            >
+                              הארך פעילות
+                            </button>
                           </div>
                         </div>
                       )}
@@ -1603,70 +2120,91 @@ export default function App() {
               <div style={styles.formContainer}>
                 <div style={styles.formCard}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px", borderBottom: "1px solid #2e2e38", paddingBottom: "8px" }}>
-                    <h3 style={{ ...styles.formTitle, margin: 0, borderBottom: "none", paddingBottom: 0 }}>בקשת תיאום מרחב</h3>
+                    <h3 style={{ ...styles.formTitle, margin: 0, borderBottom: "none", paddingBottom: 0 }}>
+                      {editingRequestId ? "עריכת בקשת טיסה" : "בקשת תיאום מרחב"}
+                    </h3>
                     <button
-                      onClick={() => setShowNewRequestForm(false)}
+                      onClick={() => { setShowNewRequestForm(false); setEditingRequestId(null); }}
                       style={{ background: "none", border: "none", color: "#7f8c8d", cursor: "pointer", fontSize: "18px", lineHeight: 1, padding: "0 4px" }}
                     >✕</button>
                   </div>
-
-                  {/* 1. Operator Details */}
-                  <div style={styles.formSection}>
-                    <h4 style={styles.formSectionHeader}>פרטי מפעיל (מערכת אול"ר)</h4>
-                    <div style={styles.formRow}>
-                      <div style={styles.formCol}>
-                        <label style={styles.fieldLabel}>שם מפעיל:</label>
-                        <input type="text" value={operatorName} onChange={(e) => setOperatorName(e.target.value)} style={styles.formInput} />
-                      </div>
-                      <div style={styles.formCol}>
-                        <label style={styles.fieldLabel}>יחידה/צוות:</label>
-                        <input type="text" value={operatorUnit} onChange={(e) => setOperatorUnit(e.target.value)} style={styles.formInput} />
-                      </div>
+                  {editingRequestId && (
+                    <div style={{ fontSize: "10px", color: "#e67e22", backgroundColor: "rgba(230,126,34,0.08)", border: "1px solid rgba(230,126,34,0.3)", borderRadius: "6px", padding: "6px 10px", marginBottom: "10px", display: "flex", alignItems: "center", gap: "5px" }}>
+                      ✏ עריכת בקשה — לאחר השמירה תחזור לסטטוס «ממתין לאישור»
                     </div>
+                  )}
+
+                  {/* 1. Operator Details — auto-filled from profile */}
+                  <div style={styles.formSection}>
+                    <h4 style={styles.formSectionHeader}>פרטי מפעיל (מהפרופיל)</h4>
+                    {!isProfileComplete ? (
+                      <div style={{ fontSize: "11px", color: "#e67e22", backgroundColor: "rgba(230,126,34,0.08)", border: "1px solid rgba(230,126,34,0.3)", borderRadius: "6px", padding: "10px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                        <span style={{ display: "flex", alignItems: "center", gap: "5px" }}><AlertTriangle size={12} color="#e67e22" /> יש להשלים את פרטי המפעיל והכח (שם, חטיבה, גדוד, אוק בקשר, טלפון) בלשונית «פרופיל» לפני הגשת בקשה.</span>
+                        <button
+                          type="button"
+                          onClick={() => { setShowNewRequestForm(false); setEditingRequestId(null); setActiveTab("PROFILE"); }}
+                          style={{ backgroundColor: "rgba(230,126,34,0.15)", color: "#e67e22", border: "1px solid rgba(230,126,34,0.4)", borderRadius: "6px", padding: "7px", fontSize: "11px", fontWeight: "bold", cursor: "pointer" }}
+                        >
+                          עבור לפרופיל
+                        </button>
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: "10px", color: "#7f8c8d" }}>שם מפעיל</span><strong style={{ fontSize: "11px", color: "#ecf0f1" }}>{operatorName}</strong></div>
+                        <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: "10px", color: "#7f8c8d" }}>יחידה</span><strong style={{ fontSize: "11px", color: "#ecf0f1" }}>{operatorUnit}</strong></div>
+                        <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: "10px", color: "#7f8c8d" }}>אוק בקשר</span><strong style={{ fontSize: "11px", color: "#ecf0f1" }}>{operatorRadioCallSign}</strong></div>
+                        <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: "10px", color: "#7f8c8d" }}>טלפון</span><strong style={{ fontSize: "11px", color: "#ecf0f1" }}>{operatorPhone}</strong></div>
+                      </div>
+                    )}
                   </div>
 
-                  {/* 2. Drone details */}
+                  {/* 2. Drone selection — frequency & armed status derive automatically, not shown */}
                   <div style={styles.formSection}>
                     <h4 style={styles.formSectionHeader}>רישום ופרטי הרחפן</h4>
                     <div style={styles.formField}>
-                      <label style={styles.fieldLabel}>בחר רחפן מהרישום:</label>
-                      <select value={selectedDroneIdx} onChange={(e) => setSelectedDroneIdx(Number(e.target.value))} style={styles.formSelect}>
-                        {myDrones.length > 0 ? (
-                          myDrones.map((d, idx) => (
-                            <option key={idx} value={idx}>
-                              {d.name} ({d.model}) — {d.tailNumber}
-                            </option>
-                          ))
-                        ) : (
-                          <option value={0}>אין רחפנים רשומים (אנא הוסף בלשונית פרופיל)</option>
-                        )}
-                      </select>
-                    </div>
-                    <div style={styles.formRow}>
-                      <div style={styles.formCol}>
-                        <label style={styles.fieldLabel}>תדר פעיל:</label>
-                        <select value={useAlternativeFreq ? "2.4" : "5.8"} onChange={(e) => setUseAlternativeFreq(e.target.value === "2.4")} style={styles.formSelect}>
-                          <option value="5.8">5.8 GHz (ראשי)</option>
-                          {activeSelectedPreset && activeSelectedPreset.freq.includes(2.4) && <option value="2.4">2.4 GHz (גיבוי/ל"א)</option>}
-                          {activeSelectedPreset && activeSelectedPreset.freq.includes(1.8) && <option value="1.8">1.8 GHz (ייעודי)</option>}
-                        </select>
-                      </div>
-                      <div style={styles.formCol}>
-                        <label style={styles.fieldLabel}>סטטוס כלי:</label>
-                        <label style={styles.checkboxContainerStyle}>
-                          <input type="checkbox" checked={isArmed} onChange={(e) => setIsArmed(e.target.checked)} style={styles.checkboxInput} />
-                          <span style={{ color: isArmed ? "#e74c3c" : "#bdc3c7", fontWeight: "bold", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}>
-                            {isArmed && <AlertTriangle size={12} color="#e74c3c" />}
-                            {isArmed ? "כלי חמוש (חמ''מ)" : "כלי לא חמוש"}
-                          </span>
-                        </label>
-                      </div>
+                      <label style={styles.fieldLabel}>בחר רחפנים לבקשה זו ({selectedDroneIndices.length} נבחרו):</label>
+                      {myDrones.length > 0 ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                          {myDrones.map((d, idx) => {
+                            const checked = selectedDroneIndices.includes(idx);
+                            return (
+                              <label key={idx} style={{
+                                display: "flex", alignItems: "center", gap: "8px",
+                                backgroundColor: checked ? "rgba(52,152,219,0.1)" : "#141419",
+                                border: `1px solid ${checked ? "rgba(52,152,219,0.5)" : "#2a2a35"}`,
+                                borderRadius: "6px", padding: "7px 10px", cursor: "pointer"
+                              }}>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => {
+                                    setSelectedDroneIndices(prev =>
+                                      checked
+                                        ? prev.filter(i => i !== idx)
+                                        : [...prev, idx]
+                                    );
+                                  }}
+                                  style={{ cursor: "pointer", accentColor: "#3498db" }}
+                                />
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <strong style={{ fontSize: "11px", color: checked ? "#ecf0f1" : "#bdc3c7", display: "block" }}>{d.name}</strong>
+                                  <span style={{ fontSize: "9px", color: "#7f8c8d" }}>{d.model} | {d.tailNumber}</span>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: "11px", color: "#e67e22", backgroundColor: "rgba(230,126,34,0.08)", border: "1px solid rgba(230,126,34,0.3)", borderRadius: "6px", padding: "8px" }}>
+                          אין רחפנים רשומים — עבור ללשונית «רחפנים» להוספה.
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  {/* 3. Space and Time */}
+                  {/* 3. Request Details */}
                   <div style={styles.formSection}>
-                    <h4 style={styles.formSectionHeader}>גבהים, נתיבים וזמנים</h4>
+                    <h4 style={styles.formSectionHeader}>פרטי הבקשה</h4>
                     <div style={styles.formRow}>
                       <div style={styles.formCol}>
                         <label style={styles.fieldLabel}>גובה מינימלי (AGL):</label>
@@ -1678,8 +2216,47 @@ export default function App() {
                       </div>
                     </div>
                     <div style={{ ...styles.formField, marginTop: "8px" }}>
+                      <label style={styles.fieldLabel}>האם חוצה גב״ל:</label>
+                      <label style={styles.checkboxContainerStyle}>
+                        <input type="checkbox" checked={crossesBorder} onChange={(e) => setCrossesBorder(e.target.checked)} style={styles.checkboxInput} />
+                        <span style={{ fontSize: "11px", color: crossesBorder ? "#e74c3c" : "#bdc3c7", fontWeight: "bold" }}>
+                          {crossesBorder ? "כן" : "לא"}
+                        </span>
+                      </label>
+                    </div>
+                    <div style={{ ...styles.formField, marginTop: "8px" }}>
                       <label style={styles.fieldLabel}>זמני פעילות מבוקשים:</label>
-                      <input type="text" value={timeWindow} onChange={(e) => setTimeWindow(e.target.value)} style={styles.formInput} />
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <div style={{ flex: 1, position: "relative", display: "flex", alignItems: "center" }}>
+                          <Clock size={12} color="#7f8c8d" style={{ position: "absolute", right: "8px", pointerEvents: "none" }} />
+                          <input
+                            type="time"
+                            value={timeWindow.split("-")[0]?.trim() || ""}
+                            onChange={(e) => {
+                              const end = timeWindow.split("-")[1]?.trim() || "";
+                              setTimeWindow(`${e.target.value}${end ? ` - ${end}` : ""}`);
+                            }}
+                            style={{ ...styles.formInput, width: "100%", paddingRight: "26px", boxSizing: "border-box", colorScheme: "dark" as any }}
+                          />
+                        </div>
+                        <span style={{ color: "#7f8c8d", fontSize: "11px" }}>עד</span>
+                        <div style={{ flex: 1, position: "relative", display: "flex", alignItems: "center" }}>
+                          <Clock size={12} color="#7f8c8d" style={{ position: "absolute", right: "8px", pointerEvents: "none" }} />
+                          <input
+                            type="time"
+                            value={timeWindow.split("-")[1]?.trim() || ""}
+                            onChange={(e) => {
+                              const start = timeWindow.split("-")[0]?.trim() || "";
+                              setTimeWindow(`${start} - ${e.target.value}`);
+                            }}
+                            style={{ ...styles.formInput, width: "100%", paddingRight: "26px", boxSizing: "border-box", colorScheme: "dark" as any }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ ...styles.formField, marginTop: "8px" }}>
+                      <label style={styles.fieldLabel}>נקודת עלייה:</label>
+                      <input type="text" value={takeoffPoint} onChange={(e) => setTakeoffPoint(e.target.value)} placeholder="לדוגמה: עמדת תצפית צפונית" style={styles.formInput} />
                     </div>
                     <div style={{ ...styles.formField, marginTop: "8px" }}>
                       <label style={styles.fieldLabel}>מרחב / פוליגון מבוקש:</label>
@@ -1715,17 +2292,50 @@ export default function App() {
                        </div>
                      )}
                     <div style={styles.gpsRow}><strong>מיקום מטיס (נ"צ GPS):</strong> 33.2320, 35.5660 (אוטומטי)</div>
+                    <div style={{ ...styles.formField, marginTop: "8px" }}>
+                      <label style={styles.fieldLabel}>תכונות מיוחדות או רכיבים:</label>
+                      <input type="text" value={specialFeatures} onChange={(e) => setSpecialFeatures(e.target.value)} placeholder="לדוגמה: מצלמת תרמית, רמקול כריזה, זרקור" style={styles.formInput} />
+                    </div>
+                    <div style={{ ...styles.formField, marginTop: "8px" }}>
+                      <label style={styles.fieldLabel}>משימה:</label>
+                      <select value={missionType} onChange={(e) => setMissionType(e.target.value)} style={styles.formSelect}>
+                        <option value="">בחר סוג משימה</option>
+                        {missionTypeOptions.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                      </select>
+                      {missionType === "אחר" && (
+                        <input type="text" value={missionTypeOther} onChange={(e) => setMissionTypeOther(e.target.value)} placeholder="פרט את סוג המשימה..." style={{ ...styles.formInput, marginTop: "6px" }} />
+                      )}
+                    </div>
+                    <div style={{ ...styles.formField, marginTop: "8px" }}>
+                      <label style={styles.fieldLabel}>תקשורת מב״א:</label>
+                      <select value={comms} onChange={(e) => setComms(e.target.value)} style={styles.formSelect}>
+                        <option value="">בחר סוג תקשורת</option>
+                        {commsOptions.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                      </select>
+                      {comms === "תדר" && (
+                        <input type="text" value={commsFreqValue} onChange={(e) => setCommsFreqValue(e.target.value)} placeholder="ערך התדר..." style={{ ...styles.formInput, marginTop: "6px" }} />
+                      )}
+                      {comms === "אחר" && (
+                        <input type="text" value={commsOther} onChange={(e) => setCommsOther(e.target.value)} placeholder="פרט..." style={{ ...styles.formInput, marginTop: "6px" }} />
+                      )}
+                    </div>
                   </div>
 
                   {/* 4. Notes */}
                   <div style={styles.formSection}>
-                    <label style={styles.fieldLabel}>הערות מפעיל למשימה:</label>
+                    <label style={styles.fieldLabel}>הערות:</label>
                     <textarea value={operatorNotes} onChange={(e) => setOperatorNotes(e.target.value)} placeholder="תיאור משימה / בקשות מיוחדות מהמפקדה..." style={styles.formTextarea} />
                   </div>
 
                   <div style={styles.formActions}>
-                    <button style={styles.submitBtn} onClick={handleSubmit}>שדר בקשה</button>
-                    <button style={styles.cancelBtn} onClick={() => setShowNewRequestForm(false)}>ביטול</button>
+                    <button
+                      style={{ ...styles.submitBtn, opacity: isProfileComplete ? 1 : 0.5, cursor: isProfileComplete ? "pointer" : "not-allowed" }}
+                      onClick={handleSubmit}
+                      disabled={!isProfileComplete}
+                    >
+                      {editingRequestId ? "עדכן בקשה" : "שדר בקשה"}
+                    </button>
+                    <button style={styles.cancelBtn} onClick={() => { setShowNewRequestForm(false); setEditingRequestId(null); }}>ביטול</button>
                   </div>
                 </div>
               </div>
@@ -1738,7 +2348,20 @@ export default function App() {
                     <ClipboardList size={15} color="#3498db" /> בקשות טיסה
                   </h3>
                   <button
-                    onClick={() => { setOperatorNotes(""); setShowNewRequestForm(true); }}
+                    onClick={() => {
+                      setEditingRequestId(null);
+                      setOperatorNotes("");
+                      setSelectedDroneIndices([0]);
+                      setCrossesBorder(false);
+                      setTakeoffPoint("");
+                      setSpecialFeatures("");
+                      setMissionType("");
+                      setMissionTypeOther("");
+                      setComms("");
+                      setCommsFreqValue("");
+                      setCommsOther("");
+                      setShowNewRequestForm(true);
+                    }}
                     style={{ backgroundColor: "#3498db", color: "#fff", border: "none", borderRadius: "6px", padding: "6px 12px", fontSize: "11px", fontWeight: "bold", cursor: "pointer", display: "flex", alignItems: "center", gap: "4px" }}
                   >
                     + בקשה חדשה
@@ -1799,6 +2422,25 @@ export default function App() {
                             {req.reviewerNotes}
                           </div>
                         )}
+                        {/* Edit button — only for non-terminal statuses */}
+                        {(req.status === "PENDING_REVIEW" || req.status === "APPROVED" || req.status === "ACTIVE") && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); openEditForm(req); }}
+                            style={{
+                              background: "none",
+                              border: "1px solid rgba(52,152,219,0.35)",
+                              color: "#3498db",
+                              cursor: "pointer",
+                              fontSize: "9px",
+                              padding: "3px 7px",
+                              borderRadius: "4px",
+                              backgroundColor: "rgba(52,152,219,0.08)",
+                              flexShrink: 0,
+                            }}
+                          >
+                            ✏ ערוך
+                          </button>
+                        )}
                         {isCurrent && (
                           <div style={{ marginTop: "6px", fontSize: "9px", color: "#3498db", textAlign: "center" }}>← הבקשה הפעילה · לחץ לעבור למפה</div>
                         )}
@@ -1852,6 +2494,18 @@ export default function App() {
               </span>
             </span>
             <span style={styles.navText}>התראות</span>
+          </button>
+
+          <button 
+            onClick={() => setActiveTab("DRONES")} 
+            style={{
+              ...styles.navItem,
+              color: activeTab === "DRONES" ? "#3498db" : "#7f8c8d",
+              borderTop: activeTab === "DRONES" ? "2px solid #3498db" : "2px solid transparent"
+            }}
+          >
+            <span style={styles.navIcon}><Cpu size={18} /></span>
+            <span style={styles.navText}>רחפנים</span>
           </button>
 
           <button 

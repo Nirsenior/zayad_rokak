@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { MapContainer, TileLayer, Marker, Polygon, Circle, Polyline, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { AlertOctagon, MapPin, Plane, Radio, X, AlertTriangle, CheckCircle, XCircle } from "lucide-react";
+import { AlertOctagon, MapPin, Plane, Radio, X, AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Activity, Wifi, Clock, Gauge, Cpu } from "lucide-react";
 import { GanttChartPanel } from "./GanttChartPanel";
 
 const isPointInPolygon = (point: [number, number], polygon: [number, number][]) => {
@@ -30,7 +30,7 @@ interface FlightRequest {
   maxAlt: number;
   conflicts: { type: string; description: string }[];
   notes: string;
-  status: "PENDING_REVIEW" | "APPROVED" | "REJECTED" | "CONFLICT";
+  status: "PENDING_REVIEW" | "APPROVED" | "ACTIVE" | "REJECTED" | "EXPIRED" | "COMPLETED" | "CONFLICT";
   reviewerNotes?: string;
   isArmed?: boolean;
   operatorLocation?: { lat: number; lng: number };
@@ -70,10 +70,13 @@ const classificationConfig = {
   },
 };
 
-const statusConfig = {
+const statusConfig: Record<string, { label: string; color: string; bg: string }> = {
   PENDING_REVIEW: { label: "ממתין לאישור", color: "var(--yellow-9)", bg: "var(--yellow-3)" },
   APPROVED: { label: "מאושר", color: "var(--blue-11)", bg: "var(--blue-3)" },
+  ACTIVE: { label: "פעיל", color: "var(--green-11)", bg: "var(--green-3)" },
   REJECTED: { label: "נדחה", color: "var(--red-9)", bg: "var(--red-3)" },
+  EXPIRED: { label: "פג תוקף", color: "var(--neutral-9)", bg: "var(--neutral-3)" },
+  COMPLETED: { label: "הושלם", color: "var(--neutral-11)", bg: "var(--neutral-4)" },
   CONFLICT: { label: "קונפליקט", color: "var(--orange-9)", bg: "#3c1e10" },
 };
 
@@ -106,7 +109,16 @@ interface Coordinates {
   altMsl: number;
 }
 
-interface Track {
+export interface DetectingSensor {
+  id: string;
+  name: string;
+  type: "RADAR" | "RF" | "ACOUSTIC" | "OPTICAL";
+  signalStrength: number;
+  detectionMethod: string;
+  lastPing?: string;
+}
+
+export interface Track {
   id: string;
   type: string;
   iffStatus: "BLUE_CERTAIN" | "BLUE_SUSPICIOUS" | "BLUE_ANOMALOUS" | "UNIDENTIFIED" | "RED_SUSPICIOUS" | "RED_CERTAIN" | "CONFLICTING";
@@ -114,6 +126,12 @@ interface Track {
   speedKts: number;
   heading: number;
   history?: [number, number][];
+  protocol?: string;
+  startTime?: string;
+  lastUpdateSeconds?: number;
+  lastUpdateTimestamp?: string;
+  altHistory?: { timestamp: string; alt: number }[];
+  detectingSensors?: DetectingSensor[];
 }
 
 interface Zone {
@@ -135,6 +153,165 @@ interface TacticalSensor {
   rangeMeters?: number;
   status: "ACTIVE" | "MAINTENANCE";
 }
+
+// Helpers & Altitude Chart Component
+const getIFFHebrewDetails = (status: Track["iffStatus"]) => {
+  switch (status) {
+    case "BLUE_CERTAIN":
+      return { text: "כוחותינו (וודאי)", bg: "#186eff", color: "#ffffff" };
+    case "BLUE_SUSPICIOUS":
+      return { text: "כוחותינו (חשוד)", bg: "#2980b9", color: "#ffffff" };
+    case "BLUE_ANOMALOUS":
+      return { text: "כוחותינו (אנומליה בגובה)", bg: "#f39c12", color: "#ffffff" };
+    case "RED_CERTAIN":
+      return { text: "כלי עוין (וודאי)", bg: "#c0392b", color: "#ffffff" };
+    case "RED_SUSPICIOUS":
+      return { text: "חשד לכלי עוין", bg: "#e74c3c", color: "#ffffff" };
+    case "CONFLICTING":
+      return { text: "סתירה בנתוני IFF", bg: "#8e44ad", color: "#ffffff" };
+    case "UNIDENTIFIED":
+    default:
+      return { text: "מטרה לא מזוהה", bg: "#d35400", color: "#ffffff" };
+  }
+};
+
+const getDetectingSensorsForTrack = (track: Track, sensorsList: TacticalSensor[]): DetectingSensor[] => {
+  if (track.detectingSensors && track.detectingSensors.length > 0) {
+    return track.detectingSensors;
+  }
+  const nearby = sensorsList.filter(s =>
+    Math.abs(s.coordinates[0] - track.coordinates.lat) < 0.12 &&
+    Math.abs(s.coordinates[1] - track.coordinates.lng) < 0.12
+  );
+
+  if (nearby.length > 0) {
+    return nearby.map((s, idx) => ({
+      id: s.id,
+      name: s.name,
+      type: s.type,
+      signalStrength: Math.min(99, Math.max(72, 96 - idx * 6)),
+      detectionMethod: s.type === "RADAR" ? "גילוי מכ''ם טקטי 3D" : s.type === "RF" ? "פענוח RF ותדר שידור" : "ניטור אופטרוניקה IR",
+      lastPing: "לפני 1 שניות"
+    }));
+  }
+
+  return [
+    {
+      id: "sensor-radar-main",
+      name: "מכ''ם גילוי טקטי (מטולה)",
+      type: "RADAR",
+      signalStrength: 95,
+      detectionMethod: "גילוי פאלסי 3D בתדר X",
+      lastPing: "לפני 1 שניות"
+    },
+    {
+      id: "sensor-rf-main",
+      name: "מקלט RF מרחבי רכס",
+      type: "RF",
+      signalStrength: 89,
+      detectionMethod: "פענוח פרוטוקול OcuSync / MAVLink",
+      lastPing: "לפני 1 שניות"
+    }
+  ];
+};
+
+const AltitudeGraph: React.FC<{
+  altHistory?: { timestamp: string; alt: number }[];
+  currentAlt: number;
+}> = ({ altHistory = [], currentAlt }) => {
+  const data = altHistory.length > 0 ? altHistory : [{ timestamp: "עכשיו", alt: currentAlt }];
+  const alts = data.map((d) => d.alt);
+  const minAlt = Math.min(...alts);
+  const maxAlt = Math.max(...alts);
+  const padding = 12;
+  const width = 296;
+  const height = 80;
+
+  const range = Math.max(8, maxAlt - minAlt);
+  const altMinBound = Math.max(0, Math.floor(minAlt - range * 0.2));
+  const altMaxBound = Math.ceil(maxAlt + range * 0.2);
+  const boundsRange = Math.max(1, altMaxBound - altMinBound);
+
+  const points = data.map((d, i) => {
+    const x = (i / Math.max(1, data.length - 1)) * (width - 2 * padding) + padding;
+    const y = height - padding - ((d.alt - altMinBound) / boundsRange) * (height - 2 * padding);
+    return { x, y, alt: d.alt, time: d.timestamp };
+  });
+
+  const pathD = points.reduce((acc, p, i) => (i === 0 ? `M ${p.x} ${p.y}` : `${acc} L ${p.x} ${p.y}`), "");
+  const areaD = points.length > 0
+    ? `${pathD} L ${points[points.length - 1].x} ${height - padding} L ${points[0].x} ${height - padding} Z`
+    : "";
+
+  const lastPoint = points[points.length - 1];
+  const firstPoint = points[0];
+  const deltaAlt = lastPoint && firstPoint ? lastPoint.alt - firstPoint.alt : 0;
+
+  return (
+    <div style={{
+      backgroundColor: "rgba(15, 23, 42, 0.75)",
+      borderRadius: "6px",
+      padding: "8px 10px",
+      border: "1px solid rgba(56, 189, 248, 0.2)",
+      margin: "8px 0",
+      direction: "rtl",
+      boxShadow: "inset 0 1px 3px rgba(0,0,0,0.3)"
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+        <span style={{ fontSize: "11px", fontWeight: "bold", color: "#94a3b8", display: "flex", alignItems: "center", gap: "4px" }}>
+          <Activity size={13} color="#38bdf8" /> גרף שינוי גובה (בזמן אמת)
+        </span>
+        <span style={{
+          fontSize: "10px",
+          fontWeight: "bold",
+          padding: "2px 6px",
+          borderRadius: "4px",
+          backgroundColor: deltaAlt > 0 ? "rgba(34,197,94,0.18)" : deltaAlt < 0 ? "rgba(239,68,68,0.18)" : "rgba(148,163,184,0.18)",
+          color: deltaAlt > 0 ? "#4ade80" : deltaAlt < 0 ? "#f87171" : "#cbd5e1"
+        }}>
+          {deltaAlt > 0 ? `▲ +${deltaAlt} מ'` : deltaAlt < 0 ? `▼ ${deltaAlt} מ'` : "━ יציב"}
+        </span>
+      </div>
+
+      <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} style={{ overflow: "visible" }}>
+        <defs>
+          <linearGradient id="altGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.45" />
+            <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.0" />
+          </linearGradient>
+        </defs>
+
+        {/* Grid lines */}
+        <line x1={padding} y1={padding} x2={width - padding} y2={padding} stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
+        <line x1={padding} y1={height / 2} x2={width - padding} y2={height / 2} stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
+        <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="rgba(255,255,255,0.12)" />
+
+        {/* Axis labels */}
+        <text x={width - 4} y={padding + 3} fill="#64748b" fontSize="8" textAnchor="end">{altMaxBound}מ'</text>
+        <text x={width - 4} y={height - padding - 2} fill="#64748b" fontSize="8" textAnchor="end">{altMinBound}מ'</text>
+
+        {/* Area fill */}
+        <path d={areaD} fill="url(#altGrad)" />
+
+        {/* Path line */}
+        <path d={pathD} fill="none" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+
+        {/* Active point indicator */}
+        {lastPoint && (
+          <g>
+            <circle cx={lastPoint.x} cy={lastPoint.y} r="5" fill="#0284c7" fillOpacity="0.5" />
+            <circle cx={lastPoint.x} cy={lastPoint.y} r="3" fill="#38bdf8" />
+          </g>
+        )}
+      </svg>
+
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "9px", color: "#64748b", marginTop: "2px" }}>
+        <span>30 שניות אחרונות</span>
+        <span style={{ color: "#38bdf8", fontWeight: "bold" }}>נוכחי: {currentAlt} מ' MSL</span>
+      </div>
+    </div>
+  );
+};
 
 interface TacticalMapProps {
   onTriggerAlert: (msg: string, metadata?: { alertType?: string; threatLocation?: { lat: number; lng: number } }) => void;
@@ -525,11 +702,26 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
   const [tracks, setTracks] = useState<Track[]>([
     {
       id: "ינשוף 1 - רחפן תצפית",
-      type: "DJI Matrice 300",
+      type: "DJI Matrice 300 RTK",
       iffStatus: "BLUE_CERTAIN",
       coordinates: { lat: 33.322, lng: 35.532, altMsl: 152 },
       speedKts: 15,
       heading: 90,
+      protocol: "OcuSync 3.0 Enterprise (מוצפן)",
+      startTime: "10:14:22",
+      lastUpdateSeconds: 0,
+      lastUpdateTimestamp: new Date().toLocaleTimeString("he-IL", { hour12: false }),
+      altHistory: [
+        { timestamp: "10:47:30", alt: 148 },
+        { timestamp: "10:47:40", alt: 150 },
+        { timestamp: "10:47:50", alt: 151 },
+        { timestamp: "10:48:00", alt: 152 },
+        { timestamp: "10:48:10", alt: 152 }
+      ],
+      detectingSensors: [
+        { id: "sensor-radar-1", name: "מכ''ם אלפא (מטולה)", type: "RADAR", signalStrength: 96, detectionMethod: "זיהוי פאלסי 3D בתדר X", lastPing: "לפני 1 שניות" },
+        { id: "sensor-rf-1", name: "מקלט RF טקטי צפון", type: "RF", signalStrength: 91, detectionMethod: "פענוח תדר 2.4GHz", lastPing: "לפני 1 שניות" }
+      ]
     },
     {
       id: "זיק 4 - רחפן אספקה",
@@ -538,8 +730,22 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
       coordinates: { lat: 33.332, lng: 35.545, altMsl: 210 },
       speedKts: 22,
       heading: 0,
+      protocol: "OcuSync 3.0",
+      startTime: "10:20:15",
+      lastUpdateSeconds: 0,
+      lastUpdateTimestamp: new Date().toLocaleTimeString("he-IL", { hour12: false }),
+      altHistory: [
+        { timestamp: "10:47:30", alt: 185 },
+        { timestamp: "10:47:40", alt: 195 },
+        { timestamp: "10:47:50", alt: 205 },
+        { timestamp: "10:48:00", alt: 210 },
+        { timestamp: "10:48:10", alt: 210 }
+      ],
+      detectingSensors: [
+        { id: "sensor-radar-1", name: "מכ''ם אלפא (מטולה)", type: "RADAR", signalStrength: 94, detectionMethod: "חריגת תקרת גובה טיסה", lastPing: "לפני 1 שניות" },
+        { id: "sensor-opt-1", name: "סנסור אופטרוניקה רכס", type: "OPTICAL", signalStrength: 88, detectionMethod: "מעקב ויזואלי IR חם", lastPing: "לפני 2 שניות" }
+      ]
     },
-    // Friendlies (Blue)
     {
       id: "צוות סיור 3 - כלי 1",
       type: "Mavic 3 Pro",
@@ -547,6 +753,19 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
       coordinates: { lat: 33.269, lng: 35.522, altMsl: 80 },
       speedKts: 18,
       heading: 45,
+      protocol: "MAVLink v2.0 (AES-256)",
+      startTime: "10:28:40",
+      lastUpdateSeconds: 0,
+      lastUpdateTimestamp: new Date().toLocaleTimeString("he-IL", { hour12: false }),
+      altHistory: [
+        { timestamp: "10:47:30", alt: 78 },
+        { timestamp: "10:47:40", alt: 79 },
+        { timestamp: "10:47:50", alt: 80 },
+        { timestamp: "10:48:00", alt: 80 }
+      ],
+      detectingSensors: [
+        { id: "sensor-rf-1", name: "מקלט RF טקטי צפון", type: "RF", signalStrength: 95, detectionMethod: "פענוח אות טלמטרייה מורשית", lastPing: "לפני 1 שניות" }
+      ]
     },
     {
       id: "צוות סיור 3 - כלי 2",
@@ -555,14 +774,32 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
       coordinates: { lat: 33.266, lng: 35.528, altMsl: 95 },
       speedKts: 14,
       heading: 315,
+      protocol: "MAVLink v2.0 (AES-256)",
+      startTime: "10:30:10",
+      lastUpdateSeconds: 0,
+      lastUpdateTimestamp: new Date().toLocaleTimeString("he-IL", { hour12: false }),
+      altHistory: [
+        { timestamp: "10:47:30", alt: 92 },
+        { timestamp: "10:47:40", alt: 94 },
+        { timestamp: "10:47:50", alt: 95 }
+      ]
     },
     {
       id: "ינשוף 3 - רחפן תצפית",
-      type: "DJI Matrice 300",
+      type: "DJI Matrice 300 RTK",
       iffStatus: "BLUE_CERTAIN",
       coordinates: { lat: 33.326, lng: 35.530, altMsl: 160 },
       speedKts: 20,
       heading: 270,
+      protocol: "OcuSync 3.0 Enterprise",
+      startTime: "10:10:00",
+      lastUpdateSeconds: 0,
+      lastUpdateTimestamp: new Date().toLocaleTimeString("he-IL", { hour12: false }),
+      altHistory: [
+        { timestamp: "10:47:30", alt: 158 },
+        { timestamp: "10:47:40", alt: 160 },
+        { timestamp: "10:47:50", alt: 160 }
+      ]
     },
     {
       id: "ינשוף 5 - סורק אופטי",
@@ -571,6 +808,14 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
       coordinates: { lat: 33.262, lng: 35.520, altMsl: 110 },
       speedKts: 16,
       heading: 60,
+      protocol: "AES-256 Mesh Digital Link",
+      startTime: "10:32:00",
+      lastUpdateSeconds: 0,
+      lastUpdateTimestamp: new Date().toLocaleTimeString("he-IL", { hour12: false }),
+      altHistory: [
+        { timestamp: "10:47:30", alt: 108 },
+        { timestamp: "10:47:40", alt: 110 }
+      ]
     },
     {
       id: "שועל 1 - משימת סריקה",
@@ -579,6 +824,15 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
       coordinates: { lat: 33.328, lng: 35.534, altMsl: 130 },
       speedKts: 22,
       heading: 190,
+      protocol: "AES-256 Mesh Digital Link",
+      startTime: "10:35:00",
+      lastUpdateSeconds: 0,
+      lastUpdateTimestamp: new Date().toLocaleTimeString("he-IL", { hour12: false }),
+      altHistory: [
+        { timestamp: "10:47:30", alt: 125 },
+        { timestamp: "10:47:40", alt: 128 },
+        { timestamp: "10:47:50", alt: 130 }
+      ]
     },
     {
       id: "שועל 2 - משימת סריקה",
@@ -587,38 +841,89 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
       coordinates: { lat: 33.335, lng: 35.550, altMsl: 140 },
       speedKts: 25,
       heading: 200,
+      protocol: "AES-256 Mesh Digital Link",
+      startTime: "10:36:12",
+      lastUpdateSeconds: 0,
+      lastUpdateTimestamp: new Date().toLocaleTimeString("he-IL", { hour12: false }),
+      altHistory: [
+        { timestamp: "10:47:30", alt: 138 },
+        { timestamp: "10:47:40", alt: 140 }
+      ]
     },
     {
       id: "אבטחה 9 - רחפן קישור",
-      type: "Mavic 3",
+      type: "Mavic 3 Pro",
       iffStatus: "BLUE_CERTAIN",
       coordinates: { lat: 33.338, lng: 35.555, altMsl: 75 },
       speedKts: 12,
       heading: 120,
+      protocol: "MAVLink v2.0",
+      startTime: "10:40:00",
+      lastUpdateSeconds: 0,
+      lastUpdateTimestamp: new Date().toLocaleTimeString("he-IL", { hour12: false }),
+      altHistory: [
+        { timestamp: "10:47:30", alt: 74 },
+        { timestamp: "10:47:40", alt: 75 }
+      ]
     },
     {
       id: "אספקה 12 - כלי כבד",
-      type: "Heavy Lifter UAV",
+      type: "Heavy Lifter Cargo UAV",
       iffStatus: "BLUE_CERTAIN",
       coordinates: { lat: 33.340, lng: 35.560, altMsl: 250 },
       speedKts: 28,
       heading: 30,
+      protocol: "Satellite / Dual RF Link",
+      startTime: "10:18:00",
+      lastUpdateSeconds: 0,
+      lastUpdateTimestamp: new Date().toLocaleTimeString("he-IL", { hour12: false }),
+      altHistory: [
+        { timestamp: "10:47:30", alt: 245 },
+        { timestamp: "10:47:40", alt: 250 }
+      ]
     },
     {
       id: "כפר גלעדי - מטרה חשודה",
-      type: "רחפן לא מזוהה",
+      type: "רחפן לא מזוהה (Quadcopter)",
       iffStatus: "UNIDENTIFIED",
       coordinates: { lat: 33.324, lng: 35.536, altMsl: 180 },
       speedKts: 12,
       heading: 180,
+      protocol: "RF 2.4GHz (תדר חופשי - לא מורשה)",
+      startTime: "10:42:10",
+      lastUpdateSeconds: 0,
+      lastUpdateTimestamp: new Date().toLocaleTimeString("he-IL", { hour12: false }),
+      altHistory: [
+        { timestamp: "10:47:10", alt: 160 },
+        { timestamp: "10:47:30", alt: 172 },
+        { timestamp: "10:47:50", alt: 180 }
+      ],
+      detectingSensors: [
+        { id: "sensor-radar-1", name: "מכ''ם אלפא (מטולה)", type: "RADAR", signalStrength: 92, detectionMethod: "זיהוי הד מכ''מי לא מורשה", lastPing: "לפני 1 שניות" },
+        { id: "sensor-rf-1", name: "מקלט RF טקטי צפון", type: "RF", signalStrength: 87, detectionMethod: "גילוי תדר שידור עוין/לא מוכר", lastPing: "לפני 1 שניות" }
+      ]
     },
     {
       id: "חדירת גבול - רחפן עוין",
-      type: "רחפן תוקף",
+      type: "רחפן תוקף (FPV/Loitering)",
       iffStatus: "RED_CERTAIN",
       coordinates: { lat: 33.330, lng: 35.540, altMsl: 90 },
       speedKts: 20,
       heading: 135,
+      protocol: "Analog Video / FHSS 915MHz",
+      startTime: "10:44:00",
+      lastUpdateSeconds: 0,
+      lastUpdateTimestamp: new Date().toLocaleTimeString("he-IL", { hour12: false }),
+      altHistory: [
+        { timestamp: "10:47:10", alt: 120 },
+        { timestamp: "10:47:30", alt: 105 },
+        { timestamp: "10:47:50", alt: 90 }
+      ],
+      detectingSensors: [
+        { id: "sensor-rf-1", name: "מקלט RF טקטי צפון", type: "RF", signalStrength: 98, detectionMethod: "זיהוי אות וידאו אנלוגי מאיים", lastPing: "לפני 1 שניות" },
+        { id: "sensor-radar-1", name: "מכ''ם אלפא (מטולה)", type: "RADAR", signalStrength: 95, detectionMethod: "מעקב מכ''מי מהיר בגובה נמוך", lastPing: "לפני 1 שניות" },
+        { id: "sensor-opt-1", name: "סנסור אופטרוניקה רכס", type: "OPTICAL", signalStrength: 91, detectionMethod: "נעילה אופטית חמה IR", lastPing: "לפני 1 שניות" }
+      ]
     }
   ]);
 
@@ -718,6 +1023,13 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
 
   const [selectedTrack, setSelectedTrack] = useState<Track | null>(null);
   const [selectedSensor, setSelectedSensor] = useState<TacticalSensor | null>(null);
+  const [sensorsDrawerOpen, setSensorsDrawerOpen] = useState<boolean>(false);
+  const selectedTrackRef = useRef<Track | null>(null);
+
+  useEffect(() => {
+    selectedTrackRef.current = selectedTrack;
+  }, [selectedTrack]);
+
   const [tigerTrackId, setTigerTrackId] = useState<string | null>(null);
   const [tigerTimer, setTigerTimer] = useState<number>(0);
   const [tigerPanelOpen, setTigerPanelOpen] = useState<boolean>(true);
@@ -800,7 +1112,7 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
     y: number;
     reqId: string;
     polygonName: string;
-    status: "PENDING_REVIEW" | "APPROVED" | "REJECTED" | "CONFLICT";
+    status: FlightRequest["status"];
   } | null>(null);
 
   // Local Toast notification state
@@ -891,7 +1203,7 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
   const [friendlyExpanded, setFriendlyExpanded] = useState(true);
   const [spectrumExpanded, setSpectrumExpanded] = useState(true);
 
-  // Simulate real-time target movement
+  // Simulate real-time target movement & telemetry updates
   useEffect(() => {
     const interval = setInterval(() => {
       setTigerTimer((prev) => {
@@ -901,10 +1213,16 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
         return 0;
       });
 
+      const nowTimeStr = new Date().toLocaleTimeString("he-IL", { hour12: false });
+
       setTracks((prev) =>
         prev.map((t) => {
           // If speed is 0 (like static RF signals), don't move
           if (t.speedKts === 0) return t;
+
+          // Altitude fluctuation (-2 to +3 meters)
+          const altDrift = Math.floor((Math.random() - 0.45) * 3);
+          const newAlt = Math.max(20, Math.min(750, t.coordinates.altMsl + altDrift));
 
           // Add a subtle drift in heading to make tracks curve organically
           const headingDrift = (Math.random() - 0.5) * 8; // -4 to +4 degrees drift
@@ -947,12 +1265,27 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
             newHistory.shift();
           }
 
-          return {
+          const currentAltHist = t.altHistory && t.altHistory.length > 0 ? t.altHistory : [{ timestamp: nowTimeStr, alt: newAlt }];
+          const updatedAltHist = [...currentAltHist, { timestamp: nowTimeStr, alt: newAlt }];
+          if (updatedAltHist.length > 30) {
+            updatedAltHist.shift();
+          }
+
+          const updatedTrack: Track = {
             ...t,
             heading: newHeading,
-            coordinates: { ...t.coordinates, lat: newLat, lng: newLng },
+            coordinates: { lat: newLat, lng: newLng, altMsl: newAlt },
             history: newHistory,
+            altHistory: updatedAltHist,
+            lastUpdateSeconds: 0,
+            lastUpdateTimestamp: nowTimeStr,
           };
+
+          if (selectedTrackRef.current?.id === t.id) {
+            setSelectedTrack(updatedTrack);
+          }
+
+          return updatedTrack;
         })
       );
     }, 1000);
@@ -1161,10 +1494,9 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                     outline: "none"
                   }}
                 >
-                  <option value="DJI Matrice 300">DJI Matrice 300</option>
-                  <option value="Mavic 3 Enterprise">Mavic 3 Enterprise</option>
-                  <option value="Skydio X2D">Skydio X2D</option>
-                  <option value="DJI Mavic 3 Pro">DJI Mavic 3 Pro</option>
+                  <option value="EVO 4T">EVO 4T</option>
+                  <option value="EVO Alfa">EVO Alfa</option>
+                  <option value="EVO Night">EVO Night</option>
                 </select>
               </div>
 
@@ -2225,6 +2557,12 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                 }
 
                 const matchingReq = requests.find((r) => r.id === reqId);
+                const isSelected = !!matchingReq && selectedRequestItem?.id === matchingReq.id;
+                if (isSelected) {
+                  fillOpacity = Math.max(fillOpacity, 0.18);
+                  weight = 4;
+                  dashArray = "6, 4";
+                }
 
                 return (
                   <Polygon
@@ -2479,27 +2817,21 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
               />
             ))}
 
-          {/* Highlight Selected Request Polygon */}
+          {/* Highlight Selected Request Polygon — only for statuses not already rendered above
+              (PENDING_REVIEW/CONFLICT and APPROVED/ACTIVE get their own selection styling in place,
+              so drawing a second polygon on top of those would double up into one big frame) */}
           {selectedRequestItem && (
+            selectedRequestItem.status === "REJECTED" ||
+            selectedRequestItem.status === "EXPIRED" ||
+            selectedRequestItem.status === "COMPLETED"
+          ) && (
             <Polygon
               positions={getRequestGeometry(selectedRequestItem)}
               pathOptions={{
-                color: selectedRequestItem.status === "APPROVED" 
-                  ? "#4589ff" 
-                  : selectedRequestItem.status === "CONFLICT"
-                  ? "var(--orange-9)"
-                  : selectedRequestItem.status === "REJECTED" 
-                  ? "var(--red-8)" 
-                  : "var(--yellow-9)",
-                fillColor: selectedRequestItem.status === "APPROVED" 
-                  ? "#4589ff" 
-                  : selectedRequestItem.status === "CONFLICT"
-                  ? "var(--orange-9)"
-                  : selectedRequestItem.status === "REJECTED" 
-                  ? "var(--red-8)" 
-                  : "var(--yellow-9)",
-                fillOpacity: selectedRequestItem.status === "APPROVED" ? 0.05 : 0.22,
-                weight: 4,
+                color: statusConfig[selectedRequestItem.status].color,
+                fillColor: statusConfig[selectedRequestItem.status].color,
+                fillOpacity: 0.12,
+                weight: 3,
                 dashArray: "6, 4",
               }}
             />
@@ -2614,8 +2946,10 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                   borderBottom: `2px solid ${getIFFColor(selectedTrack.iffStatus)}`,
                 }}>
                   <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                    <span style={{ fontSize: "10px", color: "#7f8c8d", textTransform: "uppercase" }}>מטרה פעילה</span>
-                    <span style={{ fontSize: "13px", fontWeight: "bold", color: "#ecf0f1" }}>
+                    <span style={{ fontSize: "10px", color: "#7f8c8d", textTransform: "uppercase", display: "flex", alignItems: "center", gap: "4px" }}>
+                      <Radio size={10} color="#38bdf8" /> כרטיס פרטי מטרה / רחפן
+                    </span>
+                    <span style={{ fontSize: "14px", fontWeight: "bold", color: "#ecf0f1" }}>
                       {selectedTrack.id.split(" - ")[0]}
                     </span>
                     {selectedTrack.id.includes(" - ") && (
@@ -2631,56 +2965,129 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                   ><X size={14} /></button>
                 </div>
 
-                {/* IFF Badge */}
-                <div style={{ padding: "8px 12px 4px", display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span style={{
-                    backgroundColor: getIFFColor(selectedTrack.iffStatus),
-                    color: "#fff",
-                    fontSize: "9px",
-                    fontWeight: "bold",
-                    padding: "2px 7px",
-                    borderRadius: "10px",
-                    letterSpacing: "0.5px",
-                  }}>{selectedTrack.iffStatus.replace("_", " ")}</span>
-                  <span style={{ fontSize: "10px", color: "#7f8c8d" }}>סיווג IFF</span>
-                </div>
-
-                {/* Data rows */}
                 <div style={styles.floatingCardBody}>
-                  <div style={styles.floatingDataRow}>
-                    <span style={styles.floatingDataLabel}>סוג כלי</span>
-                    <span style={styles.floatingDataValue}>{selectedTrack.type}</span>
-                  </div>
-                  <div style={styles.floatingDataRow}>
-                    <span style={styles.floatingDataLabel}>גובה MSL</span>
-                    <span style={{ ...styles.floatingDataValue, color: "#3498db", fontWeight: "bold" }}>
-                      {selectedTrack.coordinates.altMsl}מ'
+                  {/* Status Badges & Last Update Row */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                    {(() => {
+                      const iff = getIFFHebrewDetails(selectedTrack.iffStatus);
+                      return (
+                        <span style={{
+                          backgroundColor: iff.bg,
+                          color: iff.color,
+                          fontSize: "10px",
+                          fontWeight: "bold",
+                          padding: "3px 8px",
+                          borderRadius: "12px",
+                          letterSpacing: "0.3px",
+                          boxShadow: "0 2px 4px rgba(0,0,0,0.2)"
+                        }}>
+                          {iff.text}
+                        </span>
+                      );
+                    })()}
+                    <span style={{ fontSize: "10px", color: "#94a3b8", display: "flex", alignItems: "center", gap: "4px" }}>
+                      <span style={{ display: "inline-block", width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#2ecc71", boxShadow: "0 0 6px #2ecc71" }}></span>
+                      עדכון: <strong style={{ color: "#ecf0f1" }}>{selectedTrack.lastUpdateTimestamp || "עכשיו"}</strong>
                     </span>
                   </div>
-                  <div style={styles.floatingDataRow}>
-                    <span style={styles.floatingDataLabel}>מהירות</span>
-                    <span style={styles.floatingDataValue}>{selectedTrack.speedKts} קשר</span>
+
+                  {/* Real-time Altitude Graph */}
+                  <AltitudeGraph altHistory={selectedTrack.altHistory} currentAlt={selectedTrack.coordinates.altMsl} />
+
+                  {/* Telemetry & Identity Grid */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px", backgroundColor: "rgba(255,255,255,0.02)", padding: "6px 8px", borderRadius: "6px", border: "1px solid rgba(255,255,255,0.05)" }}>
+                    <div style={styles.floatingDataRow}>
+                      <span style={styles.floatingDataLabel}><Plane size={11} style={{ marginLeft: "4px" }} /> סוג רחפן</span>
+                      <span style={{ ...styles.floatingDataValue, fontWeight: "bold", color: "#ecf0f1" }}>{selectedTrack.type}</span>
+                    </div>
+
+                    <div style={styles.floatingDataRow}>
+                      <span style={styles.floatingDataLabel}><Gauge size={11} style={{ marginLeft: "4px" }} /> מהירות (קמ"ש)</span>
+                      <span style={{ ...styles.floatingDataValue, color: "#2ecc71", fontWeight: "bold" }}>
+                        {Math.round((selectedTrack.speedKts || 0) * 1.852)} קמ"ש ({selectedTrack.speedKts} קשר)
+                      </span>
+                    </div>
+
+                    <div style={styles.floatingDataRow}>
+                      <span style={styles.floatingDataLabel}><Wifi size={11} style={{ marginLeft: "4px" }} /> פרוטוקול תקשורת</span>
+                      <span style={{ ...styles.floatingDataValue, color: "#38bdf8", fontSize: "10px" }}>
+                        {selectedTrack.protocol || "OcuSync 3.0 (Encrypted)"}
+                      </span>
+                    </div>
+
+                    <div style={styles.floatingDataRow}>
+                      <span style={styles.floatingDataLabel}><Clock size={11} style={{ marginLeft: "4px" }} /> זמן התחלה</span>
+                      <span style={styles.floatingDataValue}>{selectedTrack.startTime || "10:15:00"}</span>
+                    </div>
+
+                    <div style={styles.floatingDataRow}>
+                      <span style={styles.floatingDataLabel}><Clock size={11} style={{ marginLeft: "4px" }} /> עדכון אחרון</span>
+                      <span style={{ ...styles.floatingDataValue, color: "#f1c40f" }}>
+                        {selectedTrack.lastUpdateTimestamp || "עכשיו"} (לפני 0 ש')
+                      </span>
+                    </div>
+
+                    <div style={styles.floatingDataRow}>
+                      <span style={styles.floatingDataLabel}>כיוון טיסה</span>
+                      <span style={styles.floatingDataValue}>{selectedTrack.heading}°</span>
+                    </div>
+
+                    <div style={styles.floatingDataRow}>
+                      <span style={styles.floatingDataLabel}>קואורדינטות</span>
+                      <span style={{ ...styles.floatingDataValue, fontFamily: "monospace", fontSize: "10px" }}>
+                        {selectedTrack.coordinates.lat.toFixed(4)}, {selectedTrack.coordinates.lng.toFixed(4)}
+                      </span>
+                    </div>
                   </div>
-                  <div style={styles.floatingDataRow}>
-                    <span style={styles.floatingDataLabel}>כיוון</span>
-                    <span style={styles.floatingDataValue}>{selectedTrack.heading}°</span>
-                  </div>
-                  <div style={styles.floatingDataRow}>
-                    <span style={styles.floatingDataLabel}>קוודינטות</span>
-                    <span style={{ ...styles.floatingDataValue, fontFamily: "monospace", fontSize: "10px" }}>
-                      {selectedTrack.coordinates.lat.toFixed(4)}, {selectedTrack.coordinates.lng.toFixed(4)}
-                    </span>
-                  </div>
-                  <div style={styles.floatingDataRow}>
-                    <span style={styles.floatingDataLabel}>סנסור מזהה</span>
-                    <span style={{ ...styles.floatingDataValue, color: "#d35400" }}>
-                      {sensors.find(s =>
-                        Math.abs(s.coordinates[0] - selectedTrack.coordinates.lat) < 0.04 &&
-                        Math.abs(s.coordinates[1] - selectedTrack.coordinates.lng) < 0.04
-                      )?.name.split(" (")[0] ?? "אותומטי"}
-                    </span>
-                  </div>
-                </div>
+
+                  {/* Detecting Sensors Accordion Drawer */}
+                  {(() => {
+                    const sensorList = getDetectingSensorsForTrack(selectedTrack, sensors);
+                    return (
+                      <div style={{ marginTop: "6px", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "6px", overflow: "hidden" }}>
+                        <button
+                          onClick={() => setSensorsDrawerOpen(!sensorsDrawerOpen)}
+                          style={{
+                            width: "100%",
+                            padding: "6px 8px",
+                            backgroundColor: "rgba(30, 41, 59, 0.8)",
+                            border: "none",
+                            color: "#e2e8f0",
+                            fontSize: "11px",
+                            fontWeight: "bold",
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                            <Cpu size={12} color="#f59e0b" /> חיישנים מגלים ({sensorList.length})
+                          </span>
+                          {sensorsDrawerOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        </button>
+
+                        {sensorsDrawerOpen && (
+                          <div style={{ padding: "8px", backgroundColor: "rgba(15, 23, 42, 0.9)", display: "flex", flexDirection: "column", gap: "6px" }}>
+                            {sensorList.map((sens) => (
+                              <div key={sens.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.05)", paddingBottom: "4px" }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", fontWeight: "bold" }}>
+                                  <span style={{ color: "#f1c40f" }}>{sens.name}</span>
+                                  <span style={{ color: "#38bdf8" }}>{sens.signalStrength}% עוצמה</span>
+                                </div>
+                                <div style={{ fontSize: "9px", color: "#94a3b8", marginTop: "2px" }}>
+                                  {sens.detectionMethod}
+                                </div>
+                                <div style={{ width: "100%", height: "3px", backgroundColor: "rgba(255,255,255,0.1)", borderRadius: "2px", marginTop: "4px", overflow: "hidden" }}>
+                                  <div style={{ width: `${sens.signalStrength}%`, height: "100%", backgroundColor: sens.signalStrength > 90 ? "#2ecc71" : "#f1c40f" }}></div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                 {/* Tiger Procedure Tracking section */}
                 {tigerTrackId === selectedTrack.id && (
@@ -2850,7 +3257,8 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                     >הסר רחפן</button>
                   </div>
                 )}
-              </>
+              </div>
+            </>
             ) : selectedSensor ? (
               <>
                 <div style={{ ...styles.floatingCardHeader, borderBottom: `2px solid ${selectedSensor.color}` }}>
@@ -2963,288 +3371,203 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                  <span style={styles.floatingDataLabel}>טווח גבהים</span>
                  <span style={{ ...styles.floatingDataValue }}>{selectedRequestItem.minAlt}מ' - {selectedRequestItem.maxAlt}מ'</span>
                </div>
-               <div style={styles.floatingDataRow}>
+               <div style={{ ...styles.floatingDataRow, borderBottom: "none" }}>
                  <span style={styles.floatingDataLabel}>מרחב</span>
                  <span style={{ ...styles.floatingDataValue }}>{selectedRequestItem.polygonName || "לא מוגדר"}</span>
                </div>
-            
-            {/* Status indicator */}
-            <div style={{
 
-                   backgroundColor: selectedRequestItem.status === "APPROVED"
-                     ? "var(--blue-3)"
-                     : selectedRequestItem.status === "CONFLICT"
-                     ? "#3c1e10"
-                     : selectedRequestItem.status === "REJECTED"
-                     ? "var(--red-3)"
-                     : "var(--yellow-3)",
-                   border: `1px solid ${selectedRequestItem.status === "APPROVED"
-                     ? "var(--blue-6)"
-                     : selectedRequestItem.status === "CONFLICT"
-                     ? "var(--orange-9)"
-                     : selectedRequestItem.status === "REJECTED"
-                     ? "var(--red-6)"
-                     : "var(--yellow-6)"}`,
+               {/* Status pill */}
+               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "2px" }}>
+                 <span style={{ fontSize: "10px", color: "var(--color-text-muted)" }}>סטטוס בקשה</span>
+                 <span style={{
+                   ...styles.statusPill,
+                   backgroundColor: statusConfig[selectedRequestItem.status].bg,
+                   color: statusConfig[selectedRequestItem.status].color,
                  }}>
-                   <span style={{
-                     fontSize: "11px",
-                     fontWeight: "bold",
-                     color: selectedRequestItem.status === "APPROVED"
-                       ? "var(--blue-11)"
-                       : selectedRequestItem.status === "CONFLICT"
-                       ? "var(--orange-9)"
-                       : selectedRequestItem.status === "REJECTED"
-                       ? "var(--red-9)"
-                       : "var(--yellow-11)",
-                     display: "flex",
-                     alignItems: "center",
-                     gap: "4px",
-                   }}>
-                     {selectedRequestItem.status === "APPROVED"
-                       ? <CheckCircle size={12} color="var(--blue-11)" />
-                       : selectedRequestItem.status === "CONFLICT"
-                       ? <AlertTriangle size={12} color="var(--orange-9)" />
-                       : selectedRequestItem.status === "REJECTED"
-                       ? <XCircle size={12} color="var(--red-9)" />
-                       : <AlertTriangle size={12} color="var(--yellow-9)" />}
-                     {selectedRequestItem.status === "APPROVED"
-                       ? "הבקשה אושרה"
-                       : selectedRequestItem.status === "CONFLICT"
-                       ? "הבקשה סומנה כקונפליקט"
-                       : selectedRequestItem.status === "REJECTED"
-                       ? "הבקשה נדחתה"
-                       : "הבקשה ממתינה לבחינה בתור הבקשות"}
-                   </span>
-                   {selectedRequestItem.reviewerNotes && (
-                     <div style={{ fontSize: "10px", color: "var(--neutral-12)", marginTop: "4px" }}>
-                       <strong>הערות:</strong> {selectedRequestItem.reviewerNotes}
-                     </div>
-                   )}
+                   {statusConfig[selectedRequestItem.status].label}
+                 </span>
+               </div>
+               {selectedRequestItem.reviewerNotes && (
+                 <div style={{ fontSize: "10px", color: "var(--color-text)", backgroundColor: "var(--neutral-3)", borderRadius: "4px", padding: "6px 8px" }}>
+                   <strong>הערות רוק״ק:</strong> {selectedRequestItem.reviewerNotes}
                  </div>
+               )}
 
-                 {(selectedRequestItem.status === "PENDING_REVIEW" || selectedRequestItem.status === "CONFLICT") && (
-                   <div
-                     onClick={(e) => e.stopPropagation()}
-                     style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "10px" }}
-                   >
-                     <label style={{ fontSize: "10px", color: "var(--neutral-12)" }}>הנחיות קצין רוק״ק / הערות:</label>
-                     <textarea
-                       style={{
-                         width: "100%",
-                         height: "40px",
-                         backgroundColor: "var(--neutral-3)",
-                         border: "1px solid var(--neutral-6)",
-                         color: "#fff",
-                         padding: "4px 8px",
-                         borderRadius: "4px",
-                         fontSize: "11px",
-                         resize: "none" as any,
-                         outline: "none",
-                       }}
-                       value={reviewerNotes}
-                       onChange={(e) => setReviewerNotes(e.target.value)}
-                       placeholder="הקלד הנחיות למפעיל..."
-                     />
-                     <div style={{ display: "flex", gap: "6px" }}>
-                       <button
-                         id={`float-approve-btn-${selectedRequestItem.id}`}
-                         onClick={(e) => {
-                           e.stopPropagation();
-                           onReviewRequest?.(selectedRequestItem.id, "APPROVED", reviewerNotes);
-                           setSelectedRequestItem({ ...selectedRequestItem, status: "APPROVED", reviewerNotes });
-                           setReviewerNotes("");
-                         }}
-                         style={{
-                           flex: 1,
-                           backgroundColor: "var(--green-9)",
-                           color: "#fff",
-                           border: "none",
-                           borderRadius: "4px",
-                           padding: "6px",
-                           fontSize: "11px",
-                           fontWeight: "bold",
-                           cursor: "pointer",
-                         }}
-                       >
-                         אשר בקשה
-                       </button>
-                       <button
-                         id={`float-conflict-btn-${selectedRequestItem.id}`}
-                         onClick={(e) => {
-                           e.stopPropagation();
-                           onReviewRequest?.(selectedRequestItem.id, "CONFLICT", reviewerNotes);
-                           setSelectedRequestItem({ ...selectedRequestItem, status: "CONFLICT", reviewerNotes });
-                           setReviewerNotes("");
-                         }}
-                         style={{
-                           flex: 1,
-                           backgroundColor: "var(--orange-9)",
-                           color: "#fff",
-                           border: "none",
-                           borderRadius: "4px",
-                           padding: "6px",
-                           fontSize: "11px",
-                           fontWeight: "bold",
-                           cursor: "pointer",
-                         }}
-                       >
-                         סמן כקונפליקט
-                       </button>
-                       <button
-                         id={`float-remove-btn-${selectedRequestItem.id}`}
-                         onClick={(e) => {
-                           e.stopPropagation();
-                           onReviewRequest?.(selectedRequestItem.id, "REMOVE", reviewerNotes);
-                           setSelectedRequestItem(null);
-                           setReviewerNotes("");
-                           setShowRequestDetailsCard(false);
-                         }}
-                         style={{
-                           flex: 1,
-                           backgroundColor: "var(--red-8)",
-                           color: "#fff",
-                           border: "none",
-                           borderRadius: "4px",
-                           padding: "6px",
-                           fontSize: "11px",
-                           fontWeight: "bold",
-                           cursor: "pointer",
-                         }}
-                       >
-                         הסר פוליגון
-                       </button>
-                     </div>
+               {/* Conflicts */}
+               <div style={{
+                 marginTop: "2px",
+                 padding: "8px 10px",
+                 borderRadius: "6px",
+                 border: `1px solid ${selectedRequestItem.conflicts.length > 0 ? "var(--orange-8)" : "var(--green-8)"}`,
+                 backgroundColor: selectedRequestItem.conflicts.length > 0 ? "rgba(249, 115, 22, 0.10)" : "rgba(16, 185, 129, 0.10)",
+               }}>
+                 <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                   {selectedRequestItem.conflicts.length > 0 ? <AlertTriangle size={12} color="#f97316" /> : <CheckCircle size={12} color="#10b981" />}
+                   <span style={{ fontSize: "11px", fontWeight: "bold", color: selectedRequestItem.conflicts.length > 0 ? "#ff8c3a" : "#10b981" }}>
+                     {selectedRequestItem.conflicts.length > 0 ? `נמצאו ${selectedRequestItem.conflicts.length} קונפליקטים` : "תקין — ללא קונפליקטים"}
+                   </span>
+                 </div>
+                 {selectedRequestItem.conflicts.map((c, idx) => (
+                   <div key={idx} style={{ fontSize: "10px", color: "#ffdcd0", marginTop: "4px", paddingRight: "8px" }}>
+                     • {c.description}
                    </div>
-                 )}
+                 ))}
+               </div>
+             </div>
 
-                               {/* Conflicts */}
-                <div style={{
-                  marginTop: "8px",
-                  padding: "8px",
-                  borderRadius: "4px",
-                  border: `1px solid ${selectedRequestItem.conflicts.length > 0 ? "rgba(249, 115, 22, 0.4)" : "rgba(16, 185, 129, 0.4)"}`,
-                  backgroundColor: selectedRequestItem.conflicts.length > 0 ? "rgba(249, 115, 22, 0.08)" : "rgba(16, 185, 129, 0.08)",
-                }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                    {selectedRequestItem.conflicts.length > 0 ? <AlertTriangle size={12} color="#f97316" /> : <CheckCircle size={12} color="#10b981" />}
-                    <span style={{ fontSize: "11px", fontWeight: "bold", color: selectedRequestItem.conflicts.length > 0 ? "#ff8c3a" : "#10b981" }}>
-                      {selectedRequestItem.conflicts.length > 0 ? `נמצאו ${selectedRequestItem.conflicts.length} קונפליקטים` : "תקין — ללא קונפליקטים"}
-                    </span>
-                  </div>
-                  {selectedRequestItem.conflicts.map((c, idx) => (
-                    <div key={idx} style={{ fontSize: "10px", color: "#ffdcd0", marginTop: "4px", paddingRight: "8px" }}>
-                      • {c.description}
-                    </div>
-                  ))}
-                </div>
+             {/* Footer — actions always pinned at the bottom */}
+             <div style={styles.floatingCardFooter} onClick={(e) => e.stopPropagation()}>
+               {(selectedRequestItem.status === "PENDING_REVIEW" || selectedRequestItem.status === "CONFLICT") && (
+                 <>
+                   <textarea
+                     style={{
+                       width: "100%",
+                       height: "36px",
+                       backgroundColor: "var(--neutral-3)",
+                       border: "1px solid var(--neutral-6)",
+                       color: "#fff",
+                       padding: "4px 8px",
+                       borderRadius: "4px",
+                       fontSize: "11px",
+                       resize: "none" as any,
+                       outline: "none",
+                       boxSizing: "border-box",
+                     }}
+                     value={reviewerNotes}
+                     onChange={(e) => setReviewerNotes(e.target.value)}
+                     placeholder="הנחיות קצין רוק״ק / הערות..."
+                   />
+                   <div style={{ display: "flex", gap: "6px" }}>
+                     <button
+                       id={`float-approve-btn-${selectedRequestItem.id}`}
+                       onClick={(e) => {
+                         e.stopPropagation();
+                         onReviewRequest?.(selectedRequestItem.id, "APPROVED", reviewerNotes);
+                         setSelectedRequestItem({ ...selectedRequestItem, status: "APPROVED", reviewerNotes });
+                         setReviewerNotes("");
+                       }}
+                       style={styles.floatingActionBtnPrimary}
+                     >
+                       אשר בקשה
+                     </button>
+                     <button
+                       id={`float-conflict-btn-${selectedRequestItem.id}`}
+                       onClick={(e) => {
+                         e.stopPropagation();
+                         onReviewRequest?.(selectedRequestItem.id, "CONFLICT", reviewerNotes);
+                         setSelectedRequestItem({ ...selectedRequestItem, status: "CONFLICT", reviewerNotes });
+                         setReviewerNotes("");
+                       }}
+                       style={styles.floatingActionBtnWarn}
+                     >
+                       סמן כקונפליקט
+                     </button>
+                     <button
+                       id={`float-remove-btn-${selectedRequestItem.id}`}
+                       onClick={(e) => {
+                         e.stopPropagation();
+                         onReviewRequest?.(selectedRequestItem.id, "REMOVE", reviewerNotes);
+                         setSelectedRequestItem(null);
+                         setReviewerNotes("");
+                         setShowRequestDetailsCard(false);
+                       }}
+                       style={styles.floatingActionBtnDanger}
+                     >
+                       הסר בקשה
+                     </button>
+                   </div>
+                 </>
+               )}
 
+               {selectedRequestItem.status === "APPROVED" && (
+                 <>
+                   <button
+                     onClick={() => {
+                       const pts = getRequestGeometry(selectedRequestItem);
+                       let center = { lat: 33.232, lng: 35.566 };
+                       if (pts.length > 0) {
+                         const latSum = pts.reduce((sum, p) => sum + p[0], 0);
+                         const lngSum = pts.reduce((sum, p) => sum + p[1], 0);
+                         center = { lat: latSum / pts.length, lng: lngSum / pts.length };
+                       }
 
+                       // Find any unidentified/threat track inside or near this corridor to bind Tiger to
+                       const threatTrack = tracks.find((t) => {
+                         const isThreat = t.iffStatus === "UNIDENTIFIED" || t.iffStatus.startsWith("RED");
+                         if (!isThreat) return false;
+                         if (pts.length > 0) {
+                           return isPointInPolygon([t.coordinates.lat, t.coordinates.lng], pts);
+                         }
+                         return false;
+                       });
 
-                {selectedRequestItem.status === "APPROVED" && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "10px" }}>
-                    <button
-                      onClick={() => {
-                        const pts = getRequestGeometry(selectedRequestItem);
-                        let center = { lat: 33.232, lng: 35.566 };
-                        if (pts.length > 0) {
-                          const latSum = pts.reduce((sum, p) => sum + p[0], 0);
-                          const lngSum = pts.reduce((sum, p) => sum + p[1], 0);
-                          center = { lat: latSum / pts.length, lng: lngSum / pts.length };
-                        }
+                       const targetTrackId = threatTrack ? threatTrack.id : (tracks.find(t => t.iffStatus === "UNIDENTIFIED" || t.iffStatus.startsWith("RED"))?.id || tracks[0]?.id);
 
-                        // Find any unidentified/threat track inside or near this corridor to bind Tiger to
-                        const threatTrack = tracks.find((t) => {
-                          const isThreat = t.iffStatus === "UNIDENTIFIED" || t.iffStatus.startsWith("RED");
-                          if (!isThreat) return false;
-                          if (pts.length > 0) {
-                            return isPointInPolygon([t.coordinates.lat, t.coordinates.lng], pts);
-                          }
-                          return false;
-                        });
+                       onTriggerAlert(`נוהל נמר הופעל במרחב פוליגון: ${selectedRequestItem.polygonName || selectedRequestItem.id}`, {
+                         alertType: "TIGER",
+                         threatLocation: center
+                       });
 
-                        const targetTrackId = threatTrack ? threatTrack.id : (tracks.find(t => t.iffStatus === "UNIDENTIFIED" || t.iffStatus.startsWith("RED"))?.id || tracks[0]?.id);
+                       if (targetTrackId) {
+                         setTigerTrackId(targetTrackId);
+                         setTigerTimer(15);
+                       }
+                     }}
+                     style={styles.floatingActionBtnDanger}
+                   >
+                     הפעל נוהל נמר בפוליגון
+                   </button>
 
-                        onTriggerAlert(`נוהל נמר הופעל במרחב פוליגון: ${selectedRequestItem.polygonName || selectedRequestItem.id}`, {
-                          alertType: "TIGER",
-                          threatLocation: center
-                        });
+                   <div style={{ display: "flex", gap: "6px" }}>
+                     <button
+                       onClick={(e) => {
+                         e.stopPropagation();
+                         const geom = getRequestGeometry(selectedRequestItem);
+                         setCurrentEditPoints(geom);
+                         setEditRequestId(selectedRequestItem.id);
+                         setIsEditingPoints(true);
+                       }}
+                       style={styles.floatingActionBtnSecondary}
+                     >
+                       ✏️ ערוך גבולות
+                     </button>
+                     <button
+                       onClick={(e) => {
+                         e.stopPropagation();
+                         if (confirm(`האם אתה בטוח שברצונך להסיר את המרחב המאושר?`)) {
+                           onReviewRequest?.(selectedRequestItem.id, "REMOVE", "");
+                           setSelectedRequestItem(null);
+                           setShowRequestDetailsCard(false);
+                           showToast("המרחב הוסר בהצלחה מהמערכת", "WARNING");
+                         }
+                       }}
+                       style={styles.floatingActionBtnDanger}
+                     >
+                       🗑️ הסר מרחב
+                     </button>
+                   </div>
+                 </>
+               )}
 
-                        if (targetTrackId) {
-                          setTigerTrackId(targetTrackId);
-                          setTigerTimer(15);
-                        }
-                      }}
-                      style={{
-                        width: "100%",
-                        backgroundColor: "#e74c3c",
-                        color: "#fff",
-                        border: "none",
-                        borderRadius: "4px",
-                        padding: "8px",
-                        fontSize: "11px",
-                        fontWeight: "bold",
-                        cursor: "pointer",
-                        transition: "background-color 0.2s"
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#c0392b")}
-                      onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "#e74c3c")}
-                    >
-                      הפעל נוהל נמר בפוליגון
-                    </button>
-                    
-                    <div style={{ display: "flex", gap: "6px" }}>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const geom = getRequestGeometry(selectedRequestItem);
-                          setCurrentEditPoints(geom);
-                          setEditRequestId(selectedRequestItem.id);
-                          setIsEditingPoints(true);
-                        }}
-                        style={{
-                          flex: 1,
-                          backgroundColor: "var(--blue-9)",
-                          color: "#fff",
-                          border: "none",
-                          borderRadius: "4px",
-                          padding: "6px",
-                          fontSize: "11px",
-                          fontWeight: "bold",
-                          cursor: "pointer",
-                        }}
-                      >
-                        ✏️ ערוך גבולות
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (confirm(`האם אתה בטוח שברצונך להסיר את המרחב המאושר?`)) {
-                            onReviewRequest?.(selectedRequestItem.id, "REMOVE", "");
-                            setSelectedRequestItem(null);
-                            setShowRequestDetailsCard(false);
-                            showToast("המרחב הוסר בהצלחה מהמערכת", "WARNING");
-                          }
-                        }}
-                        style={{
-                          flex: 1,
-                          backgroundColor: "var(--red-8)",
-                          color: "#fff",
-                          border: "none",
-                          borderRadius: "4px",
-                          padding: "6px",
-                          fontSize: "11px",
-                          fontWeight: "bold",
-                          cursor: "pointer",
-                        }}
-                      >
-                        🗑️ הסר מרחב
-                      </button>
-                    </div>
-                  </div>
-                )}
-                </div>
-              </div>
-            )}
+               {(selectedRequestItem.status === "REJECTED" || selectedRequestItem.status === "EXPIRED" || selectedRequestItem.status === "COMPLETED" || selectedRequestItem.status === "ACTIVE") && (
+                 <button
+                   onClick={(e) => {
+                     e.stopPropagation();
+                     if (confirm(`האם אתה בטוח שברצונך להסיר את הבקשה?`)) {
+                       onReviewRequest?.(selectedRequestItem.id, "REMOVE", "");
+                       setSelectedRequestItem(null);
+                       setShowRequestDetailsCard(false);
+                       showToast("הבקשה הוסרה בהצלחה מהמערכת", "WARNING");
+                     }
+                   }}
+                   style={styles.floatingActionBtnDanger}
+                 >
+                   🗑️ הסר בקשה
+                 </button>
+               )}
+             </div>
+          </div>
+        )}
 
             {/* Tiger Procedure Collapsible Control Panel */}
             {tigerTrackId && tigerPanelOpen && (() => {
@@ -3951,7 +4274,7 @@ const styles: Record<string, React.CSSProperties> = {
     top: "10px",
     left: "10px",
     zIndex: 1001,
-    width: "240px",
+    width: "320px",
     backgroundColor: "var(--color-bg-card)",
     border: "1px solid var(--color-border-strong)",
     borderRadius: "var(--radius-md)",
@@ -3960,6 +4283,9 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: "hidden",
     direction: "rtl",
     pointerEvents: "auto",
+    maxHeight: "calc(100vh - 40px)",
+    display: "flex",
+    flexDirection: "column",
   },
   floatingCardHeader: {
     display: "flex",
@@ -3985,6 +4311,62 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     gap: "6px",
+    overflowY: "auto",
+    maxHeight: "calc(100vh - 120px)",
+    flex: 1,
+  },
+  floatingCardFooter: {
+    padding: "10px 12px",
+    display: "flex",
+    flexDirection: "column",
+    gap: "6px",
+    borderTop: "1px solid var(--color-border-subtle)",
+    backgroundColor: "var(--neutral-5)",
+    flexShrink: 0,
+  },
+  floatingActionBtnPrimary: {
+    flex: 1,
+    backgroundColor: "var(--green-9)",
+    color: "#fff",
+    border: "none",
+    borderRadius: "4px",
+    padding: "7px",
+    fontSize: "11px",
+    fontWeight: "bold" as any,
+    cursor: "pointer",
+  },
+  floatingActionBtnWarn: {
+    flex: 1,
+    backgroundColor: "var(--orange-9)",
+    color: "#fff",
+    border: "none",
+    borderRadius: "4px",
+    padding: "7px",
+    fontSize: "11px",
+    fontWeight: "bold" as any,
+    cursor: "pointer",
+  },
+  floatingActionBtnDanger: {
+    flex: 1,
+    backgroundColor: "var(--red-8)",
+    color: "#fff",
+    border: "none",
+    borderRadius: "4px",
+    padding: "7px",
+    fontSize: "11px",
+    fontWeight: "bold" as any,
+    cursor: "pointer",
+  },
+  floatingActionBtnSecondary: {
+    flex: 1,
+    backgroundColor: "var(--blue-9)",
+    color: "#fff",
+    border: "none",
+    borderRadius: "4px",
+    padding: "7px",
+    fontSize: "11px",
+    fontWeight: "bold" as any,
+    cursor: "pointer",
   },
   floatingDataRow: {
     display: "flex",

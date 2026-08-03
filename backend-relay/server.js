@@ -58,16 +58,26 @@ wss.on("connection", (ws) => {
           console.log(`Persisted new request: ${req.id}`);
         }
       } else if (parsed.type === "REVIEW_FLIGHT_REQUEST") {
-        const { requestId, status, reviewerNotes } = parsed;
+        const { requestId, status, reviewerNotes, droneLogs } = parsed;
         const req = persistedRequests.find((r) => r.id === requestId);
         if (req) {
           req.status = status;
-          if (reviewerNotes !== undefined) {
-            req.reviewerNotes = reviewerNotes;
-          }
+          if (reviewerNotes !== undefined) req.reviewerNotes = reviewerNotes;
+          if (droneLogs !== undefined) req.droneLogs = droneLogs;
           saveRequests();
           console.log(`Updated request ${requestId} status to: ${status}`);
         }
+      } else if (parsed.type === "UPDATE_FLIGHT_REQUEST") {
+        // Full request update from operator (edit mode)
+        const { request } = parsed;
+        const idx = persistedRequests.findIndex((r) => r.id === request.id);
+        if (idx !== -1) {
+          persistedRequests[idx] = { ...persistedRequests[idx], ...request };
+        } else {
+          persistedRequests.push(request);
+        }
+        saveRequests();
+        console.log(`Full update for request: ${request.id}`);
       } else if (parsed.type === "DEACTIVATE_FLIGHT") {
         // Find request matching this flight id and remove or complete it
         const reqId = parsed.flightId.replace("flight", "req");

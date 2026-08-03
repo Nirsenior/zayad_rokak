@@ -13,7 +13,15 @@ interface FlightRequest {
   maxAlt: number;
   conflicts: { type: string; description: string }[];
   notes: string;
-  status: "PENDING_REVIEW" | "APPROVED" | "REJECTED" | "CONFLICT";
+  status: "PENDING_REVIEW" | "APPROVED" | "ACTIVE" | "REJECTED" | "EXPIRED" | "COMPLETED" | "CONFLICT";
+  reviewerNotes?: string;
+  isArmed?: boolean;
+  operatorLocation?: { lat: number; lng: number };
+  polygonType?: "PREDEFINED" | "CUSTOM";
+  polygonName?: string;
+  operatorNotes?: string;
+  customPolygonPoints?: [number, number][];
+  droneLogs?: { droneModel: string; action: string; timestamp: string }[];
 }
 
 interface ActiveFlight {
@@ -43,7 +51,7 @@ interface UnifiedGanttItem {
   unit: string;
   droneModel: string;
   timeWindow: string;
-  status: "ACTIVE" | "COMMS_LOSS" | "ANOMALOUS" | "COMPLETED" | "LANDED" | "PENDING_REVIEW" | "APPROVED" | "REJECTED" | "CONFLICT";
+  status: "ACTIVE" | "COMMS_LOSS" | "ANOMALOUS" | "COMPLETED" | "LANDED" | "PENDING_REVIEW" | "APPROVED" | "REJECTED" | "EXPIRED" | "CONFLICT";
   minAlt: number;
   maxAlt: number;
   currentAlt?: number;

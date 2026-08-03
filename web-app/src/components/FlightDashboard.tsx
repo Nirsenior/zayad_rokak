@@ -19,7 +19,7 @@ interface FlightRequest {
   maxAlt: number;
   conflicts: Conflict[];
   notes: string;
-  status: "PENDING_REVIEW" | "APPROVED" | "REJECTED" | "CONFLICT";
+  status: "PENDING_REVIEW" | "APPROVED" | "ACTIVE" | "REJECTED" | "EXPIRED" | "COMPLETED" | "CONFLICT";
   reviewerNotes?: string;
   isArmed?: boolean;
   operatorLocation?: { lat: number; lng: number };
@@ -27,6 +27,7 @@ interface FlightRequest {
   polygonName?: string;
   operatorNotes?: string;
   customPolygonPoints?: [number, number][];
+  droneLogs?: { droneModel: string; action: string; timestamp: string }[];
 }
 
 interface FlightDashboardProps {
@@ -69,6 +70,10 @@ const statusConfig = {
   APPROVED: { label: "מאושר", color: "var(--blue-11)", bg: "var(--blue-3)" },
   REJECTED: { label: "נדחה", color: "var(--red-9)", bg: "var(--red-3)" },
   CONFLICT: { label: "קונפליקט", color: "var(--orange-9)", bg: "#3c1e10" },
+  REMOVE: { label: "הוסר", color: "var(--red-9)", bg: "var(--red-3)" },
+  ACTIVE: { label: "פעיל", color: "var(--green-11)", bg: "var(--green-3)" },
+  COMPLETED: { label: "הסתיים", color: "var(--neutral-11)", bg: "var(--neutral-3)" },
+  EXPIRED: { label: "פג תוקף", color: "var(--red-9)", bg: "var(--red-3)" },
 };
 
 export const FlightDashboard: React.FC<FlightDashboardProps> = ({ requests, onReview }) => {
@@ -280,6 +285,42 @@ export const FlightDashboard: React.FC<FlightDashboardProps> = ({ requests, onRe
               </div>
             )}
           </div>
+
+          {/* Drone Activity Timeline Logs */}
+          {selectedReq.droneLogs && selectedReq.droneLogs.length > 0 && (
+            <div style={{
+              marginTop: "16px",
+              padding: "12px",
+              borderRadius: "8px",
+              border: "1px solid rgba(255, 255, 255, 0.08)",
+              backgroundColor: "rgba(255, 255, 255, 0.02)",
+            }}>
+              <span style={{
+                fontSize: "11px",
+                fontWeight: "bold",
+                color: "#888",
+                display: "block",
+                marginBottom: "8px",
+              }}>יומן פעילות רחפנים במרחב</span>
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                {selectedReq.droneLogs.map((log: any, idx: number) => (
+                  <div key={idx} style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
+                    <div style={{
+                      marginTop: "4px",
+                      width: "6px",
+                      height: "6px",
+                      borderRadius: "50%",
+                      backgroundColor: log.action.includes("המראה") ? "#2ecc71" : log.action.includes("נחיתה") ? "#e74c3c" : "#3498db",
+                    }} />
+                    <div style={{ flex: 1, display: "flex", justifyContent: "space-between", fontSize: "10.5px" }}>
+                      <span style={{ color: "#ecf0f1", fontWeight: "500" }}>{log.action} ({log.droneModel})</span>
+                      <span style={{ color: "#888", fontSize: "9.5px" }}>{log.timestamp}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Action Form */}
           {selectedReq.status === "PENDING_REVIEW" || selectedReq.status === "CONFLICT" ? (

@@ -32,7 +32,7 @@ interface FlightRequest {
   maxAlt: number;
   conflicts: Conflict[];
   notes: string;
-  status: "PENDING_REVIEW" | "APPROVED" | "REJECTED" | "CONFLICT";
+  status: "PENDING_REVIEW" | "APPROVED" | "ACTIVE" | "REJECTED" | "EXPIRED" | "COMPLETED" | "CONFLICT";
   reviewerNotes?: string;
   isArmed?: boolean;
   operatorLocation?: { lat: number; lng: number };
@@ -40,6 +40,7 @@ interface FlightRequest {
   polygonName?: string;
   operatorNotes?: string;
   customPolygonPoints?: [number, number][];
+  droneLogs?: { droneModel: string; action: string; timestamp: string }[];
 }
 
 interface ActiveFlight {
@@ -137,15 +138,99 @@ export default function App() {
 
 
 
+  const getPolygonPoints = (req: any): [number, number][] => {
+    if (req.polygonType === "CUSTOM" && req.customPolygonPoints && req.customPolygonPoints.length > 0) {
+      return req.customPolygonPoints;
+    }
+    if (req.polygonName === "מסדרון גדס''ר") {
+      return [[33.226, 35.560], [33.238, 35.560], [33.238, 35.572], [33.226, 35.572]];
+    }
+    if (req.polygonName === "מרחב סיוע 4") {
+      return [[33.250, 35.570], [33.270, 35.570], [33.270, 35.585], [33.250, 35.585]];
+    }
+    return [[33.215, 35.562], [33.238, 35.562], [33.238, 35.568], [33.215, 35.568]];
+  };
+
+  const parseTimeWindow = (windowStr: string) => {
+    const parts = windowStr.split("-").map(p => p.trim());
+    if (parts.length !== 2) return { startMinutes: 0, endMinutes: 1440 };
+    const parseTime = (t: string) => {
+      const [h, m] = t.split(":").map(Number);
+      return (isNaN(h) ? 0 : h) * 60 + (isNaN(m) ? 0 : m);
+    };
+    return { startMinutes: parseTime(parts[0]), endMinutes: parseTime(parts[1]) };
+  };
+
+  const checkTimeOverlap = (windowA: string, windowB: string): boolean => {
+    const timeA = parseTimeWindow(windowA);
+    const timeB = parseTimeWindow(windowB);
+    return timeA.startMinutes < timeB.endMinutes && timeB.startMinutes < timeA.endMinutes;
+  };
+
+  const segmentsIntersect = (
+    p1: [number, number], p2: [number, number],
+    q1: [number, number], q2: [number, number]
+  ): boolean => {
+    const crossProduct = (a: [number, number], b: [number, number], c: [number, number]) => {
+      return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    };
+    
+    const d1 = crossProduct(q1, q2, p1);
+    const d2 = crossProduct(q1, q2, p2);
+    const d3 = crossProduct(p1, p2, q1);
+    const d4 = crossProduct(p1, p2, q2);
+    
+    if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+        ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+      return true;
+    }
+    return false;
+  };
+
+  const pointInPolygon = (point: [number, number], vs: [number, number][]): boolean => {
+    const x = point[0], y = point[1];
+    let inside = false;
+    for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+      const xi = vs[i][0], yi = vs[i][1];
+      const xj = vs[j][0], yj = vs[j][1];
+      const intersect = ((yi > y) !== (yj > y))
+          && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  };
+
+  const polygonsOverlap = (polyA: [number, number][], polyB: [number, number][]): boolean => {
+    // 1. Check segment intersections
+    for (let i = 0; i < polyA.length; i++) {
+      const nextA = polyA[(i + 1) % polyA.length];
+      for (let j = 0; j < polyB.length; j++) {
+        const nextB = polyB[(j + 1) % polyB.length];
+        if (segmentsIntersect(polyA[i], nextA, polyB[j], nextB)) {
+          return true;
+        }
+      }
+    }
+    // 2. Check if any point of A is inside B
+    for (let i = 0; i < polyA.length; i++) {
+      if (pointInPolygon(polyA[i], polyB)) return true;
+    }
+    // 3. Check if any point of B is inside A
+    for (let i = 0; i < polyB.length; i++) {
+      if (pointInPolygon(polyB[i], polyA)) return true;
+    }
+    return false;
+  };
+
   // Auto-deconfliction & classification checks
-  const runDeconflictionChecks = (req: any) => {
+  const runDeconflictionChecks = (req: any, customRequestsList?: FlightRequest[]) => {
     const conflicts: Conflict[] = [];
     let classification: "GREEN" | "ORANGE" | "RED" = "GREEN";
 
     if (req.isArmed) {
       conflicts.push({
         type: "ARMED_DRONE",
-        description: "כלי חמוש (חמ''מ) - תעופת חימוש מחייבת אישור קמב''ץ / מח''ט!"
+        description: "כלי טיס חמוש במרחב האווירי - מחייב אישור מפקד גזרה"
       });
       classification = "RED";
     }
@@ -153,7 +238,7 @@ export default function App() {
     if (req.frequencies?.includes(5.8)) {
       conflicts.push({
         type: "SPECTRUM_WARN",
-        description: "פוטנציאל לשיבוש - פוליגון מבוקש חופף לחסימת ל''א (מגן עליון) בתדר 5.8GHz"
+        description: "חשש לשיבוש תדרים - חפיפה לאזור חסימת ספקטרום פעיל"
       });
       if (classification !== "RED") {
         classification = "ORANGE";
@@ -163,16 +248,38 @@ export default function App() {
     if (req.polygonName === "מרחב סיוע 4" || req.maxAlt > 100) {
       conflicts.push({
         type: "NFZ_VIOLATION",
-        description: "חפיפה לאזור אסור לטיסה (NFZ #2 מטולה) או חריגת גובה מירבי"
+        description: req.maxAlt > 100
+          ? "חריגה מתקרת גובה טיסה מרבי מותר (מעל 100 מטר)"
+          : "חדירה/חפיפה לאזור אסור לטיסה (NFZ)"
       });
       classification = "RED";
     } else if (req.polygonName === "מסדרון גדס''ר" && req.isArmed) {
       conflicts.push({
         type: "SECTOR_CONSTRAINT",
-        description: "אילוץ מבצעי - פעילות כוחות קרקעיים בנתיב מסדרון גדס''ר"
+        description: "אילוץ מבצעי פעיל - פעילות כוחות קרקעיים במרחב הטיסה"
       });
       classification = "RED";
     }
+
+    // Check for overlaps with other approved/active requests
+    const listToCheck = customRequestsList || requests || [];
+    const others = listToCheck.filter((other: any) => other.id !== req.id && (other.status === "APPROVED" || other.status === "ACTIVE"));
+    
+    others.forEach((other: any) => {
+      const timeOverlap = checkTimeOverlap(req.timeWindow, other.timeWindow);
+      const altOverlap = (req.minAlt < other.maxAlt && other.minAlt < req.maxAlt);
+      if (timeOverlap && altOverlap) {
+        const polyA = getPolygonPoints(req);
+        const polyB = getPolygonPoints(other);
+        if (polygonsOverlap(polyA, polyB)) {
+          conflicts.push({
+            type: "AIRSPACE_CONFLICT",
+            description: `חפיפת מרחב אווירי וזמן עם בקשה מאושרת/פעילה של כוח ${other.unit} (מפעיל: ${other.operatorName})`
+          });
+          classification = "RED";
+        }
+      }
+    });
 
     return { conflicts, classification };
   };
@@ -203,26 +310,28 @@ export default function App() {
           console.log("HQ Received message:", message);
 
           if (message.type === "INITIAL_REQUESTS_LOAD") {
-            const enriched = message.requests.map((r: any) => {
-              const analyzed = runDeconflictionChecks(r);
-              return {
-                ...r,
-                classification: analyzed.classification,
-                conflicts: analyzed.conflicts,
-              };
-            });
+            const enriched = message.requests
+              .filter((r: any) => r.status !== "REMOVE")
+              .map((r: any) => {
+                const analyzed = runDeconflictionChecks(r, message.requests);
+                return {
+                  ...r,
+                  classification: analyzed.classification,
+                  conflicts: analyzed.conflicts,
+                };
+              });
             setRequests(enriched);
-            
+
             // Also populate approved corridors for already approved requests
             enriched.forEach((req: any) => {
               if (req.status === "APPROVED") {
                 const corridorGeom = (req.polygonType === "CUSTOM" && req.customPolygonPoints && req.customPolygonPoints.length > 0)
                   ? req.customPolygonPoints
                   : req.polygonName === "מסדרון גדס''ר"
-                  ? [[33.226, 35.560], [33.238, 35.560], [33.238, 35.572], [33.226, 35.572]]
-                  : req.polygonName === "מרחב סיוע 4"
-                  ? [[33.250, 35.570], [33.270, 35.570], [33.270, 35.585], [33.250, 35.585]]
-                  : [[33.215, 35.562], [33.238, 35.562], [33.238, 35.568], [33.215, 35.568]];
+                    ? [[33.226, 35.560], [33.238, 35.560], [33.238, 35.572], [33.226, 35.572]]
+                    : req.polygonName === "מרחב סיוע 4"
+                      ? [[33.250, 35.570], [33.270, 35.570], [33.270, 35.585], [33.250, 35.585]]
+                      : [[33.215, 35.562], [33.238, 35.562], [33.238, 35.568], [33.215, 35.568]];
 
                 const corridorId = `approved-${req.id}`;
                 const newCorridor = {
@@ -249,9 +358,9 @@ export default function App() {
             };
             setRequests((prev) => {
               if (prev.some((r) => r.id === requestWithDeconfliction.id)) return prev;
-              
+
               // Also check for duplicate contents to prevent double-submits
-              const isDuplicateContent = prev.some((r) => 
+              const isDuplicateContent = prev.some((r) =>
                 r.status === "PENDING_REVIEW" &&
                 r.operatorName === requestWithDeconfliction.operatorName &&
                 r.unit === requestWithDeconfliction.unit &&
@@ -263,6 +372,78 @@ export default function App() {
 
               return [requestWithDeconfliction, ...prev];
             });
+          } else if (message.type === "UPDATE_FLIGHT_REQUEST") {
+            // Operator edited an existing request — re-run deconfliction, reset to PENDING_REVIEW
+            const analyzed = runDeconflictionChecks(message.request);
+            const updated = {
+              ...message.request,
+              classification: analyzed.classification,
+              conflicts: analyzed.conflicts,
+              status: "PENDING_REVIEW",
+            };
+            setRequests((prev) => prev.map((r) => r.id === updated.id ? updated : r));
+            // Remove old approved corridor if any (needs re-approval)
+            setApprovedCorridors((prev) => prev.filter((c) => c.id !== `approved-${updated.id}`));
+
+          } else if (message.type === "REVIEW_FLIGHT_REQUEST") {
+            if (message.status === "REMOVE") {
+              setRequests((prev) => prev.filter((r) => r.id !== message.requestId));
+              const flightId = message.requestId.replace("req", "flight");
+              setFlights((prev) => prev.map((f) => f.id === flightId ? { ...f, status: "COMPLETED" } : f));
+              setApprovedCorridors((prev) => prev.filter((c) => c.id !== `approved-${message.requestId}`));
+              setLiveTracks((prev) => {
+                const copy = { ...prev };
+                delete copy[flightId];
+                return copy;
+              });
+            } else {
+              setRequests((prev) =>
+                prev.map((r) => {
+                  if (r.id === message.requestId) {
+                    const updated = {
+                      ...r,
+                      status: message.status,
+                      reviewerNotes: message.reviewerNotes,
+                    };
+                    if (message.droneLogs !== undefined) {
+                      updated.droneLogs = message.droneLogs;
+                    }
+                    return updated;
+                  }
+                  return r;
+                })
+              );
+              if (message.status === "APPROVED" || message.status === "ACTIVE") {
+                setRequests((prevRequests) => {
+                  const req = prevRequests.find((r) => r.id === message.requestId);
+                  if (req) {
+                    const corridorGeom = (req.polygonType === "CUSTOM" && req.customPolygonPoints && req.customPolygonPoints.length > 0)
+                      ? req.customPolygonPoints
+                      : req.polygonName === "מסדרון גדס''ר"
+                        ? [[33.226, 35.560], [33.238, 35.560], [33.238, 35.572], [33.226, 35.572]]
+                        : req.polygonName === "מרחב סיוע 4"
+                          ? [[33.250, 35.570], [33.270, 35.570], [33.270, 35.585], [33.250, 35.585]]
+                          : [[33.215, 35.562], [33.238, 35.562], [33.238, 35.568], [33.215, 35.568]];
+
+                    const corridorId = `approved-${message.requestId}`;
+                    const newCorridor = {
+                      id: corridorId,
+                      name: req.polygonName || "מרחב אווירי מאושר",
+                      type: "CORRIDOR",
+                      floor: req.minAlt,
+                      ceiling: req.maxAlt,
+                      color: "#186eff",
+                      geometry: corridorGeom,
+                    };
+                    setApprovedCorridors((prevCorridors) => {
+                      if (prevCorridors.some((c) => c.id === corridorId)) return prevCorridors;
+                      return [...prevCorridors, newCorridor];
+                    });
+                  }
+                  return prevRequests;
+                });
+              }
+            }
           } else if (message.type === "REGISTER_OPERATOR") {
             setOperators((prev) => {
               const now = new Date();
@@ -274,19 +455,19 @@ export default function App() {
                 return prev.map((op) =>
                   op.name === incoming.name
                     ? {
-                        ...op,
-                        unit: incoming.unit,
-                        drones: incoming.drones.map((d: any) => ({
-                          id: d.id || `drone-${Math.floor(1000 + Math.random() * 9000)}`,
-                          tailNumber: d.tailNumber,
-                          model: d.model,
-                          devices: d.devices,
-                          name: d.name,
-                          status: d.status || "INACTIVE"
-                        })),
-                        status: "ONLINE" as const,
-                        lastSeen: `עודכן ב-${timeStr}`,
-                      }
+                      ...op,
+                      unit: incoming.unit,
+                      drones: incoming.drones.map((d: any) => ({
+                        id: d.id || `drone-${Math.floor(1000 + Math.random() * 9000)}`,
+                        tailNumber: d.tailNumber,
+                        model: d.model,
+                        devices: d.devices,
+                        name: d.name,
+                        status: d.status || "INACTIVE"
+                      })),
+                      status: "ONLINE" as const,
+                      lastSeen: `עודכן ב-${timeStr}`,
+                    }
                     : op
                 );
               } else {
@@ -310,16 +491,44 @@ export default function App() {
               }
             });
           } else if (message.type === "TELEMETRY_PING") {
+            // Transition request status to ACTIVE
+            const reqId = message.flightId.replace("flight", "req");
+            setRequests((prevRequests) => {
+              const req = prevRequests.find((r) => r.id === reqId);
+              if (req && req.status !== "ACTIVE") {
+                if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+                  socketRef.current.send(
+                    JSON.stringify({
+                      type: "REVIEW_FLIGHT_REQUEST",
+                      requestId: reqId,
+                      status: "ACTIVE",
+                    })
+                  );
+                }
+                return prevRequests.map((r) => (r.id === reqId ? { ...r, status: "ACTIVE" } : r));
+              }
+              return prevRequests;
+            });
+
             setFlights((prev) => {
               const exists = prev.some((f) => f.id === message.flightId);
               if (!exists) {
+                // Find request to get correct altitude profile limits
+                let minAltVal = 20;
+                let maxAltVal = 150;
+                const matchingReq = requests.find(r => r.id === reqId);
+                if (matchingReq) {
+                  minAltVal = matchingReq.minAlt;
+                  maxAltVal = matchingReq.maxAlt;
+                }
+
                 const newF: ActiveFlight = {
                   id: message.flightId,
                   droneModel: message.droneModel,
                   operatorName: message.operatorName,
                   unit: message.unit,
-                  minAlt: 20,
-                  maxAlt: 150,
+                  minAlt: minAltVal,
+                  maxAlt: maxAltVal,
                   currentAlt: message.alt,
                   battery: message.battery,
                   lastPingSeconds: 0,
@@ -373,6 +582,24 @@ export default function App() {
               })
             );
           } else if (message.type === "FLIGHT_LANDED") {
+            const reqId = message.flightId.replace("flight", "req");
+            setRequests((prevRequests) => {
+              const req = prevRequests.find((r) => r.id === reqId);
+              if (req && req.status !== "COMPLETED") {
+                if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+                  socketRef.current.send(
+                    JSON.stringify({
+                      type: "REVIEW_FLIGHT_REQUEST",
+                      requestId: reqId,
+                      status: "COMPLETED",
+                    })
+                  );
+                }
+                return prevRequests.map((r) => (r.id === reqId ? { ...r, status: "COMPLETED" } : r));
+              }
+              return prevRequests;
+            });
+
             setFlights((prev) =>
               prev.map((f) => (f.id === message.flightId ? { ...f, status: "LANDED" } : f))
             );
@@ -388,7 +615,7 @@ export default function App() {
           } else if (message.type === "DEACTIVATE_FLIGHT") {
             const isBaseId = !message.flightId.includes("-", 7);
             const prefix = message.flightId.split("-").slice(0, 2).join("-");
-            
+
             setFlights((prev) =>
               prev.map((f) => {
                 if (f.id === message.flightId || (isBaseId && f.id.startsWith(prefix))) {
@@ -397,12 +624,12 @@ export default function App() {
                 return f;
               })
             );
-            
+
             if (isBaseId) {
               const baseReqId = message.flightId.replace("flight", "req");
               setApprovedCorridors((prev) => prev.filter((c) => c.id !== `approved-${baseReqId}`));
             }
-            
+
             setLiveTracks((prev) => {
               const copy = { ...prev };
               if (isBaseId) {
@@ -445,11 +672,11 @@ export default function App() {
               prev.map((f) =>
                 f.id === message.flightId
                   ? {
-                      ...f,
-                      tigerStatus: message.status === "EXECUTED" ? "CONFIRMED" : message.status,
-                      tigerReason: message.reason || "",
-                      tigerResponseTime: message.timestamp || "",
-                    }
+                    ...f,
+                    tigerStatus: message.status === "EXECUTED" ? "CONFIRMED" : message.status,
+                    tigerReason: message.reason || "",
+                    tigerResponseTime: message.timestamp || "",
+                  }
                   : f
               )
             );
@@ -493,6 +720,52 @@ export default function App() {
         clearTimeout(reconnectTimeout);
       }
     };
+  }, []);
+
+  // Periodic check for expired requests and time overruns
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = new Date();
+      const currentMin = now.getHours() * 60 + now.getMinutes();
+
+      setRequests((prevRequests) => {
+        let changed = false;
+        const updated = prevRequests.map((r) => {
+          const time = parseTimeWindow(r.timeWindow);
+          if (currentMin > time.endMinutes) {
+            if (r.status === "APPROVED") {
+              changed = true;
+              if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+                socketRef.current.send(JSON.stringify({
+                  type: "REVIEW_FLIGHT_REQUEST",
+                  requestId: r.id,
+                  status: "EXPIRED"
+                }));
+              }
+              return { ...r, status: "EXPIRED" as const };
+            } else if (r.status === "ACTIVE") {
+              const hasOverrun = r.conflicts.some((c) => c.type === "TIME_OVERRUN");
+              if (!hasOverrun) {
+                changed = true;
+                const newConflict = {
+                  type: "TIME_OVERRUN",
+                  description: "חריגה מבצעית - פעילות נמשכת מעבר לחלון הזמן המאושר (פג תוקף)"
+                };
+                return {
+                  ...r,
+                  conflicts: [...r.conflicts, newConflict],
+                  classification: "RED" as const
+                };
+              }
+            }
+          }
+          return r;
+        });
+        return changed ? updated : prevRequests;
+      });
+    }, 5000);
+
+    return () => clearInterval(interval);
   }, []);
 
   // Shared Requests State
@@ -546,10 +819,10 @@ export default function App() {
               activeFlight.status === "ACTIVE"
                 ? "ACTIVE"
                 : activeFlight.status === "COMMS_LOSS"
-                ? "COMMS_LOSS"
-                : activeFlight.status === "ANOMALOUS"
-                ? "ANOMALOUS"
-                : "INACTIVE";
+                  ? "COMMS_LOSS"
+                  : activeFlight.status === "ANOMALOUS"
+                    ? "ANOMALOUS"
+                    : "INACTIVE";
           }
 
           if (drone.status !== targetStatus) {
@@ -660,10 +933,10 @@ export default function App() {
         const corridorGeom = (req.polygonType === "CUSTOM" && req.customPolygonPoints && req.customPolygonPoints.length > 0)
           ? req.customPolygonPoints
           : req.polygonName === "מסדרון גדס''ר"
-          ? [[33.226, 35.560], [33.238, 35.560], [33.238, 35.572], [33.226, 35.572]]
-          : req.polygonName === "מרחב סיוע 4"
-          ? [[33.250, 35.570], [33.270, 35.570], [33.270, 35.585], [33.250, 35.585]]
-          : [[33.215, 35.562], [33.238, 35.562], [33.238, 35.568], [33.215, 35.568]];
+            ? [[33.226, 35.560], [33.238, 35.560], [33.238, 35.572], [33.226, 35.572]]
+            : req.polygonName === "מרחב סיוע 4"
+              ? [[33.250, 35.570], [33.270, 35.570], [33.270, 35.585], [33.250, 35.585]]
+              : [[33.215, 35.562], [33.238, 35.562], [33.238, 35.568], [33.215, 35.568]];
 
         const corridorId = `approved-${id}`;
         const newCorridor = {
@@ -678,24 +951,6 @@ export default function App() {
         setApprovedCorridors((prev) => {
           if (prev.some((c) => c.id === corridorId)) return prev;
           return [...prev, newCorridor];
-        });
-
-        const flightId = id.replace("req", "flight");
-        const newFlight: ActiveFlight = {
-          id: flightId,
-          droneModel: req.droneModel,
-          operatorName: req.operatorName,
-          unit: req.unit,
-          minAlt: req.minAlt,
-          maxAlt: req.maxAlt,
-          currentAlt: req.minAlt + 10,
-          battery: 95,
-          lastPingSeconds: 0,
-          status: "ACTIVE",
-        };
-        setFlights((prev) => {
-          if (prev.some((f) => f.id === flightId)) return prev;
-          return [...prev, newFlight];
         });
       }
     } else if (action === "CONFLICT") {
@@ -730,14 +985,14 @@ export default function App() {
   const handleRemoveLiveTrack = (trackId: string) => {
     const prefix = trackId.split("-").slice(0, 2).join("-");
     const isBaseId = !trackId.includes("-", 7);
-    
+
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify({
         type: "DEACTIVATE_FLIGHT",
         flightId: trackId
       }));
     }
-    
+
     setFlights((prev) =>
       prev.map((f) => {
         if (f.id === trackId || (isBaseId && f.id.startsWith(prefix))) {
