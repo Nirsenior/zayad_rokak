@@ -1,9 +1,51 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { MapContainer, TileLayer, Marker, Polygon, Circle, Polyline, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { AlertOctagon, MapPin, Plane, Radio, X, AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Activity, Wifi, Clock, Gauge, Cpu } from "lucide-react";
+import "leaflet.heat";
+import { AlertOctagon, MapPin, Plane, Radio, X, AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Activity, Wifi, Clock, Gauge, Cpu, Flame, Route, Layers, Crosshair } from "lucide-react";
 import { GanttChartPanel } from "./GanttChartPanel";
+import {
+  ANTENNA_PRESETS,
+  getAntennaPreset,
+  computeEffectiveRangeMeters,
+  computeIsEdited,
+  isOmniAntenna,
+  buildSectorPolygon,
+  type RFAntenna,
+} from "../utils/rfCoverage";
+import {
+  MOCK_SENSOR_DETECTIONS,
+  MOCK_IDENTIFICATION_EVENTS,
+  MOCK_DATA_RANGE_START_MS,
+  MOCK_DATA_RANGE_END_MS,
+  enrichDetections,
+  type SensorType,
+  type IffStatus,
+  type EnrichedDetection,
+} from "../data/mockEnemyDetections";
+import { useAppSession } from "../context/AppSessionContext";
+import { useDebouncedValue } from "../hooks/useDebouncedValue";
+
+// datetime-local inputs use "YYYY-MM-DDTHH:mm" in the browser's local timezone.
+const msToDatetimeLocalValue = (ms: number): string => {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+const datetimeLocalValueToMs = (value: string): number | null => {
+  const ms = new Date(value).getTime();
+  return Number.isNaN(ms) ? null : ms;
+};
+const enemyTrackColor = (status: IffStatus): string => {
+  switch (status) {
+    case "RED_CERTAIN": return "#dc2626";
+    case "RED_SUSPICIOUS": return "#f97316";
+    case "UNIDENTIFIED": return "#eab308";
+    case "CONFLICTING": return "#a855f7";
+    default: return "#94a3b8";
+  }
+};
 
 const isPointInPolygon = (point: [number, number], polygon: [number, number][]) => {
   const x = point[0], y = point[1];
@@ -326,6 +368,9 @@ interface TacticalMapProps {
   onGanttToggle?: () => void;
   onCreateRequest?: (newReq: FlightRequest) => void;
   onUpdateRequestCoordinates?: (id: string, points: [number, number][]) => void;
+  antennas?: RFAntenna[];
+  onUpsertAntenna?: (antenna: RFAntenna) => void;
+  onRemoveAntenna?: (id: string) => void;
 }
 
 // Custom DivIcon creator for Drones/Tracks
@@ -503,6 +548,52 @@ const createSensorIcon = (type: TacticalSensor["type"], color: string, name: str
   });
 };
 
+const ANTENNA_MARKER_COLOR = "#f59e0b";
+
+const createAntennaIcon = (antenna: RFAntenna) => {
+  const preset = getAntennaPreset(antenna.presetId);
+  const edited = computeIsEdited(antenna, preset);
+  return L.divIcon({
+    className: "tactical-antenna-marker",
+    html: `
+      <div style="position: relative; display: flex; flex-direction: column; align-items: center;">
+        <div style="
+          background-color: ${ANTENNA_MARKER_COLOR};
+          border: 1.5px solid #fff;
+          width: 24px;
+          height: 24px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+          position: relative;
+        ">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 20V10M9 7a4 4 0 0 1 6 0M6 4a8 8 0 0 1 12 0"/>
+            <circle cx="12" cy="20" r="1.5" fill="white"/>
+          </svg>
+          ${edited ? `<div style="position: absolute; top: -3px; right: -3px; width: 9px; height: 9px; border-radius: 50%; background-color: #e74c3c; border: 1.5px solid #fff;"></div>` : ""}
+        </div>
+        <span style="
+          margin-top: 3px;
+          font-size: 8px;
+          font-weight: bold;
+          color: #fff;
+          background-color: rgba(0,0,0,0.85);
+          padding: 1px 3px;
+          border-radius: 2px;
+          border: 1px solid ${ANTENNA_MARKER_COLOR};
+          white-space: nowrap;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.6);
+        ">${antenna.name}</span>
+      </div>
+    `,
+    iconSize: [44, 44],
+    iconAnchor: [22, 12],
+  });
+};
+
 const PRESETS = {
   TAIBE_BEAUFORT: {
     name: "תרחיש אטייבה + בופור (לבנון)",
@@ -665,7 +756,128 @@ const MapClickHandler: React.FC<MapClickHandlerProps> = ({ enabled, onMapClick }
   return null;
 };
 
-export const TacticalMap: React.FC<TacticalMapProps> = ({ 
+// Imperative leaflet.heat layer — react-leaflet has no declarative <HeatLayer>,
+// so this follows the same useMap()+useEffect+return-null shape as the other
+// map controllers above (MapFlyController/MapResizeController/MapClickHandler).
+interface EnemyHeatLayerControllerProps {
+  points: L.HeatLatLngTuple[];
+}
+const EnemyHeatLayerController: React.FC<EnemyHeatLayerControllerProps> = ({ points }) => {
+  const map = useMap();
+
+  useEffect(() => {
+    const layer = L.heatLayer(points, {
+      radius: 34,
+      blur: 24,
+      maxZoom: 15,
+      max: 4, // tuned against the mock cluster density — a lone point (intensity 1) stays faint
+      minOpacity: 0.25,
+      gradient: { 0.15: "#1d4ed8", 0.4: "#f59e0b", 0.7: "#ef4444", 1.0: "#7f1d1d" },
+    }).addTo(map);
+
+    return () => {
+      map.removeLayer(layer);
+    };
+  }, [map, points]);
+
+  return null;
+};
+
+const formatScrubberLabel = (ms: number): string =>
+  new Date(ms).toLocaleString("he-IL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+
+// Dual-handle range slider. Dragging updates a local ref-backed handler (no React
+// state per pointermove) and calls onChange every frame — the caller is responsible
+// for debouncing the expensive part (filtering/heat recompute), this component just
+// reports raw drag positions so the handles themselves never lag behind the pointer.
+interface EnemyTimelineScrubberProps {
+  boundsStart: number;
+  boundsEnd: number;
+  rangeStart: number;
+  rangeEnd: number;
+  onChange: (start: number, end: number) => void;
+}
+const EnemyTimelineScrubber: React.FC<EnemyTimelineScrubberProps> = ({ boundsStart, boundsEnd, rangeStart, rangeEnd, onChange }) => {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const rangeStartRef = useRef(rangeStart);
+  const rangeEndRef = useRef(rangeEnd);
+  const onChangeRef = useRef(onChange);
+  rangeStartRef.current = rangeStart;
+  rangeEndRef.current = rangeEnd;
+  onChangeRef.current = onChange;
+
+  const toMs = (clientX: number): number => {
+    const rect = trackRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0) return boundsStart;
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    return boundsStart + ratio * (boundsEnd - boundsStart);
+  };
+
+  const startDrag = (handle: "start" | "end") => (e: React.PointerEvent) => {
+    e.preventDefault();
+    const MIN_GAP_MS = 60 * 60 * 1000; // handles can't cross within 1h of each other
+    const move = (ev: PointerEvent) => {
+      const ms = toMs(ev.clientX);
+      if (handle === "start") {
+        onChangeRef.current(Math.min(ms, rangeEndRef.current - MIN_GAP_MS), rangeEndRef.current);
+      } else {
+        onChangeRef.current(rangeStartRef.current, Math.max(ms, rangeStartRef.current + MIN_GAP_MS));
+      }
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  const startPct = ((rangeStart - boundsStart) / (boundsEnd - boundsStart)) * 100;
+  const endPct = ((rangeEnd - boundsStart) / (boundsEnd - boundsStart)) * 100;
+
+  const handleStyle = (pct: number): React.CSSProperties => ({
+    position: "absolute",
+    top: "50%",
+    right: `${100 - pct}%`,
+    transform: "translate(50%, -50%)",
+    width: "16px",
+    height: "16px",
+    borderRadius: "50%",
+    backgroundColor: "#ff3d3d",
+    border: "2px solid #fff",
+    boxShadow: "0 1px 4px rgba(0,0,0,0.5)",
+    cursor: "ew-resize",
+    touchAction: "none",
+  });
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "10px", width: "100%", padding: "0 16px", boxSizing: "border-box" }}>
+      <span style={{ fontSize: "10px", color: "var(--color-text-muted)", whiteSpace: "nowrap" }}>
+        {formatScrubberLabel(rangeStart)}
+      </span>
+      <div ref={trackRef} style={{ position: "relative", flex: 1, height: "4px", backgroundColor: "var(--neutral-4)", borderRadius: "2px" }}>
+        <div
+          style={{
+            position: "absolute",
+            top: 0,
+            bottom: 0,
+            right: `${100 - endPct}%`,
+            left: `${startPct}%`,
+            backgroundColor: "#ff3d3d",
+            borderRadius: "2px",
+          }}
+        />
+        <div style={handleStyle(startPct)} onPointerDown={startDrag("start")} title={formatScrubberLabel(rangeStart)} />
+        <div style={handleStyle(endPct)} onPointerDown={startDrag("end")} title={formatScrubberLabel(rangeEnd)} />
+      </div>
+      <span style={{ fontSize: "10px", color: "var(--color-text-muted)", whiteSpace: "nowrap" }}>
+        {formatScrubberLabel(rangeEnd)}
+      </span>
+    </div>
+  );
+};
+
+export const TacticalMap: React.FC<TacticalMapProps> = ({
   onTriggerAlert, 
   liveTracks = [], 
   approvedCorridors = [],
@@ -677,7 +889,10 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
   showGantt = false,
   onGanttToggle,
   onCreateRequest,
-  onUpdateRequestCoordinates
+  onUpdateRequestCoordinates,
+  antennas = [],
+  onUpsertAntenna,
+  onRemoveAntenna
 }) => {
   const handleCloseIncident = (trackId: string) => {
     setTracks((prev) => prev.filter((t) => t.id !== trackId));
@@ -1167,14 +1382,100 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
   const [showNFZ, setShowNFZ] = useState(true);
   const [showSpectrum, setShowSpectrum] = useState(true);
   const [showGroundForces, setShowGroundForces] = useState(true);
+  const [showAntennas, setShowAntennas] = useState(true);
+  const [showEnemyHeatmap, setShowEnemyHeatmap] = useState(true);
+
+  // RF antenna placement + editing state
+  const [selectedAntenna, setSelectedAntenna] = useState<RFAntenna | null>(null);
+  const [antennaEditDraft, setAntennaEditDraft] = useState<RFAntenna | null>(null);
+  const [pendingAntennaPresetId, setPendingAntennaPresetId] = useState<string>(ANTENNA_PRESETS[0].id);
+  const [antennaPlacementPresetId, setAntennaPlacementPresetId] = useState<string | null>(null);
+
+  // Enemy activity heatmap — filters, time range, and display mode
+  const [enemyDateRangeMode, setEnemyDateRangeMode] = useState<'24h' | '7d' | '30d' | 'custom'>('24h');
+  const [enemyRangeStart, setEnemyRangeStart] = useState<number>(MOCK_DATA_RANGE_END_MS - 24 * 60 * 60 * 1000);
+  const [enemyRangeEnd, setEnemyRangeEnd] = useState<number>(MOCK_DATA_RANGE_END_MS);
+  const [enemySensorTypeFilter, setEnemySensorTypeFilter] = useState<Set<SensorType>>(
+    () => new Set<SensorType>(["RADAR", "RF_FINDER", "OPTICAL", "EXTERNAL_SYSTEM"])
+  );
+  const [enemyIffFilter, setEnemyIffFilter] = useState<Set<IffStatus>>(
+    () => new Set<IffStatus>(["RED_SUSPICIOUS", "RED_CERTAIN", "UNIDENTIFIED"])
+  );
+  const [enemyDisplayMode, setEnemyDisplayMode] = useState<'heat' | 'tracks' | 'combined'>('heat');
+  // Scrubber drags update this immediately (smooth handles); the committed range above
+  // only follows after a short debounce, so filtering/heat recompute isn't per-pixel.
+  const [enemyPendingRange, setEnemyPendingRange] = useState<{ start: number; end: number } | null>(null);
+  const debouncedEnemyPendingRange = useDebouncedValue(enemyPendingRange, 120);
+
+  useEffect(() => {
+    if (debouncedEnemyPendingRange) {
+      setEnemyRangeStart(debouncedEnemyPendingRange.start);
+      setEnemyRangeEnd(debouncedEnemyPendingRange.end);
+    }
+  }, [debouncedEnemyPendingRange]);
 
   // Floating menu toggle state
   const [layersMenuOpen, setLayersMenuOpen] = useState(false);
+  const [antennaWidgetOpen, setAntennaWidgetOpen] = useState(false);
+  const [enemyWidgetOpen, setEnemyWidgetOpen] = useState(false);
 
   // Admin panel state
   const [adminMenuOpen, setAdminMenuOpen] = useState(false);
   const [selectedAdminItem, setSelectedAdminItem] = useState<{ type: 'gf' | 'track'; id: string } | null>(null);
   const [adminClickToMove, setAdminClickToMove] = useState(false);
+
+  // Enemy activity heatmap — derived data. AOR restriction: no polygon exists yet,
+  // so this filters strictly by the connected user's unit_id (session.unitId).
+  const { session } = useAppSession();
+
+  const enemyDetections: EnrichedDetection[] = useMemo(() => {
+    return enrichDetections(MOCK_SENSOR_DETECTIONS, MOCK_IDENTIFICATION_EVENTS, {
+      unitId: session.unitId,
+      rangeStartMs: enemyRangeStart,
+      rangeEndMs: enemyRangeEnd,
+      sensorTypes: enemySensorTypeFilter,
+      iffStatuses: enemyIffFilter,
+    });
+  }, [session.unitId, enemyRangeStart, enemyRangeEnd, enemySensorTypeFilter, enemyIffFilter]);
+
+  // Intensity must come from point DENSITY, not a single detection — bin into a coordinate
+  // grid and use the per-cell count as the heat weight, so an isolated point stays cold.
+  const enemyHeatPoints: L.HeatLatLngTuple[] = useMemo(() => {
+    const CELL_DEG = 0.003; // ~300m grid cells
+    const cells = new Map<string, { latSum: number; lngSum: number; count: number }>();
+    for (const d of enemyDetections) {
+      const key = `${Math.round(d.lat / CELL_DEG)}:${Math.round(d.lng / CELL_DEG)}`;
+      const cell = cells.get(key);
+      if (cell) {
+        cell.latSum += d.lat;
+        cell.lngSum += d.lng;
+        cell.count += 1;
+      } else {
+        cells.set(key, { latSum: d.lat, lngSum: d.lng, count: 1 });
+      }
+    }
+    return Array.from(cells.values()).map((c) => [c.latSum / c.count, c.lngSum / c.count, c.count]);
+  }, [enemyDetections]);
+
+  const enemyTrackGroups: { trackId: string; points: [number, number][]; iffStatus: IffStatus }[] = useMemo(() => {
+    const byTrack = new Map<string, EnrichedDetection[]>();
+    for (const d of enemyDetections) {
+      const group = byTrack.get(d.target_track_id);
+      if (group) group.push(d);
+      else byTrack.set(d.target_track_id, [d]);
+    }
+    const result: { trackId: string; points: [number, number][]; iffStatus: IffStatus }[] = [];
+    byTrack.forEach((group, trackId) => {
+      if (group.length < 2) return; // a lone detection can't draw a path
+      const sorted = [...group].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      result.push({
+        trackId,
+        points: sorted.map((d) => [d.lat, d.lng] as [number, number]),
+        iffStatus: sorted[sorted.length - 1].current_iff_status,
+      });
+    });
+    return result;
+  }, [enemyDetections]);
 
   const loadScenario = (scenario: 'TAIBE_BEAUFORT' | 'DEFAULT_METULA') => {
     const preset = PRESETS[scenario];
@@ -2329,6 +2630,283 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                 <input type="checkbox" checked={showGroundForces} onChange={(e) => setShowGroundForces(e.target.checked)} />
                 כוחותינו (קרקע)
               </label>
+              <label style={styles.layerCheckboxRow}>
+                <input type="checkbox" checked={showAntennas} onChange={(e) => setShowAntennas(e.target.checked)} />
+                אנטנות RF
+              </label>
+              <label style={styles.layerCheckboxRow}>
+                <input type="checkbox" checked={showEnemyHeatmap} onChange={(e) => setShowEnemyHeatmap(e.target.checked)} />
+                תמונת מצב אויב
+              </label>
+            </div>
+          )}
+        </div>
+
+        {/* Floating RF antenna widget above the map */}
+        <div style={styles.floatingAntennaWidget}>
+          <button style={styles.floatingAntennaToggle} onClick={() => setAntennaWidgetOpen(!antennaWidgetOpen)}>
+            📡 אנטנות RF {antennaWidgetOpen ? "▲" : "▼"}
+          </button>
+          {antennaWidgetOpen && (
+            <div style={styles.floatingAntennaContent}>
+              {antennaPlacementPresetId ? (
+                <div style={{
+                  fontSize: "10px",
+                  color: "#f59e0b",
+                  backgroundColor: "rgba(245,158,11,0.1)",
+                  border: "1px solid rgba(245,158,11,0.4)",
+                  borderRadius: "4px",
+                  padding: "6px 8px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "6px",
+                }}>
+                  <span>לחץ על המפה למיקום האנטנה</span>
+                  <button
+                    onClick={() => setAntennaPlacementPresetId(null)}
+                    style={{ background: "none", border: "none", color: "#f59e0b", cursor: "pointer", fontWeight: "bold" }}
+                  >
+                    ביטול
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <span style={{ fontSize: "11px", fontWeight: "bold", color: "var(--color-text-muted)" }}>הוספת אנטנה חדשה</span>
+                  <select
+                    value={pendingAntennaPresetId}
+                    onChange={(e) => setPendingAntennaPresetId(e.target.value)}
+                    style={styles.adminSelect}
+                  >
+                    {ANTENNA_PRESETS.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => {
+                      setAdminClickToMove(false);
+                      setAntennaPlacementPresetId(pendingAntennaPresetId);
+                    }}
+                    style={{
+                      backgroundColor: "rgba(245,158,11,0.15)",
+                      color: "#f59e0b",
+                      border: "1px solid rgba(245,158,11,0.4)",
+                      borderRadius: "4px",
+                      padding: "6px 8px",
+                      fontSize: "10px",
+                      fontWeight: "bold",
+                      cursor: "pointer",
+                    }}
+                  >
+                    📍 הצב על המפה
+                  </button>
+                </>
+              )}
+
+              {antennas.length > 0 && (
+                <div style={{ borderTop: "1px solid var(--color-border-subtle)", paddingTop: "8px", marginTop: "2px", display: "flex", flexDirection: "column", gap: "5px" }}>
+                  <span style={{ fontSize: "11px", fontWeight: "bold", color: "var(--color-text-muted)" }}>אנטנות פרוסות ({antennas.length})</span>
+                  {antennas.map((ant) => {
+                    const preset = getAntennaPreset(ant.presetId);
+                    const edited = computeIsEdited(ant, preset);
+                    return (
+                      <div
+                        key={ant.id}
+                        onClick={() => {
+                          setSelectedAntenna(ant);
+                          setAntennaEditDraft({ ...ant });
+                        }}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: "6px",
+                          padding: "5px 7px",
+                          borderRadius: "4px",
+                          backgroundColor: selectedAntenna?.id === ant.id ? "rgba(245,158,11,0.12)" : "var(--neutral-3)",
+                          border: `1px solid ${selectedAntenna?.id === ant.id ? "rgba(245,158,11,0.4)" : "var(--color-border-subtle)"}`,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span style={{ fontSize: "10px", color: "var(--color-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {ant.name}
+                        </span>
+                        {edited && (
+                          <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#e74c3c", flexShrink: 0 }} />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Floating enemy activity heatmap widget above the map */}
+        <div style={styles.floatingEnemyWidget}>
+          <button style={styles.floatingEnemyToggle} onClick={() => setEnemyWidgetOpen(!enemyWidgetOpen)}>
+            🎯 תמונת מצב אויב {enemyWidgetOpen ? "▲" : "▼"}
+          </button>
+          {enemyWidgetOpen && (
+            <div style={styles.floatingEnemyContent}>
+              <div>
+                <span style={{ fontSize: "11px", fontWeight: "bold", color: "var(--color-text-muted)", display: "block", marginBottom: "6px" }}>
+                  טווח תאריכים
+                </span>
+                <div style={styles.enemyQuickRangeRow}>
+                  {(["24h", "7d", "30d"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      onClick={() => {
+                        const durationsMs: Record<"24h" | "7d" | "30d", number> = {
+                          "24h": 24 * 60 * 60 * 1000,
+                          "7d": 7 * 24 * 60 * 60 * 1000,
+                          "30d": 30 * 24 * 60 * 60 * 1000,
+                        };
+                        setEnemyDateRangeMode(mode);
+                        setEnemyPendingRange(null);
+                        setEnemyRangeEnd(MOCK_DATA_RANGE_END_MS);
+                        setEnemyRangeStart(MOCK_DATA_RANGE_END_MS - durationsMs[mode]);
+                      }}
+                      style={{
+                        ...styles.enemyQuickRangeBtn,
+                        backgroundColor: enemyDateRangeMode === mode ? "#ff3d3d" : "var(--neutral-3)",
+                        color: enemyDateRangeMode === mode ? "#fff" : "var(--color-text)",
+                      }}
+                    >
+                      {mode === "24h" ? "24 ש'" : mode === "7d" ? "7 ימים" : "30 יום"}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => setEnemyDateRangeMode("custom")}
+                    style={{
+                      ...styles.enemyQuickRangeBtn,
+                      backgroundColor: enemyDateRangeMode === "custom" ? "#ff3d3d" : "var(--neutral-3)",
+                      color: enemyDateRangeMode === "custom" ? "#fff" : "var(--color-text)",
+                    }}
+                  >
+                    מותאם
+                  </button>
+                </div>
+                {enemyDateRangeMode === "custom" && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "6px" }}>
+                    <input
+                      type="datetime-local"
+                      value={msToDatetimeLocalValue(enemyRangeStart)}
+                      onChange={(e) => {
+                        const ms = datetimeLocalValueToMs(e.target.value);
+                        if (ms !== null) setEnemyRangeStart(ms);
+                      }}
+                      style={{ ...styles.adminInput }}
+                    />
+                    <input
+                      type="datetime-local"
+                      value={msToDatetimeLocalValue(enemyRangeEnd)}
+                      onChange={(e) => {
+                        const ms = datetimeLocalValueToMs(e.target.value);
+                        if (ms !== null) setEnemyRangeEnd(ms);
+                      }}
+                      style={{ ...styles.adminInput }}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <span style={{ fontSize: "11px", fontWeight: "bold", color: "var(--color-text-muted)", display: "block", marginBottom: "6px" }}>
+                  סוג זיהוי
+                </span>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  {(
+                    [
+                      ["RADAR", 'מכ"ם'],
+                      ["RF_FINDER", "איתור RF"],
+                      ["OPTICAL", "אופטי"],
+                      ["EXTERNAL_SYSTEM", "מערכת חיצונית"],
+                    ] as [SensorType, string][]
+                  ).map(([type, label]) => (
+                    <label key={type} style={styles.layerCheckboxRow}>
+                      <input
+                        type="checkbox"
+                        checked={enemySensorTypeFilter.has(type)}
+                        onChange={() =>
+                          setEnemySensorTypeFilter((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(type)) next.delete(type);
+                            else next.add(type);
+                            return next;
+                          })
+                        }
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <span style={{ fontSize: "11px", fontWeight: "bold", color: "var(--color-text-muted)", display: "block", marginBottom: "6px" }}>
+                  סטטוס IFF (תמונת אויב)
+                </span>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  {(
+                    [
+                      ["RED_CERTAIN", "אדום ודאי"],
+                      ["RED_SUSPICIOUS", "חשד אדום"],
+                      ["UNIDENTIFIED", "לא מזוהה"],
+                    ] as [IffStatus, string][]
+                  ).map(([status, label]) => (
+                    <label key={status} style={styles.layerCheckboxRow}>
+                      <input
+                        type="checkbox"
+                        checked={enemyIffFilter.has(status)}
+                        onChange={() =>
+                          setEnemyIffFilter((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(status)) next.delete(status);
+                            else next.add(status);
+                            return next;
+                          })
+                        }
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <span style={{ fontSize: "11px", fontWeight: "bold", color: "var(--color-text-muted)", display: "block", marginBottom: "6px" }}>
+                  תצוגה
+                </span>
+                <div style={styles.enemyModeRow}>
+                  {(
+                    [
+                      ["heat", "שכבת חום", Flame],
+                      ["tracks", "נתיבי טיסה", Route],
+                      ["combined", "משולב", Layers],
+                    ] as [typeof enemyDisplayMode, string, typeof Flame][]
+                  ).map(([mode, label, Icon]) => (
+                    <button
+                      key={mode}
+                      onClick={() => setEnemyDisplayMode(mode)}
+                      style={{
+                        ...styles.enemyModeBtn,
+                        backgroundColor: enemyDisplayMode === mode ? "#ff3d3d" : "var(--neutral-3)",
+                        color: enemyDisplayMode === mode ? "#fff" : "var(--color-text)",
+                      }}
+                    >
+                      <Icon size={13} />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ fontSize: "10px", color: "var(--color-text-muted)", borderTop: "1px solid var(--color-border-subtle)", paddingTop: "7px" }}>
+                {enemyDetections.length} גילויים בטווח שנבחר
+              </div>
             </div>
           )}
         </div>
@@ -2452,8 +3030,11 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                       <input 
                         type="checkbox" 
                         id="click-to-move-chk"
-                        checked={adminClickToMove} 
-                        onChange={(e) => setAdminClickToMove(e.target.checked)} 
+                        checked={adminClickToMove}
+                        onChange={(e) => {
+                          setAdminClickToMove(e.target.checked);
+                          if (e.target.checked) setAntennaPlacementPresetId(null);
+                        }}
                         style={{ cursor: "pointer" }}
                       />
                       <label htmlFor="click-to-move-chk" style={{ fontSize: "11px", fontWeight: "bold", color: "#22d3ee", cursor: "pointer", userSelect: "none" }}>
@@ -2508,7 +3089,32 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                 }
               }}
             />
-          
+
+            <MapClickHandler
+              enabled={!!antennaPlacementPresetId}
+              onMapClick={(lat, lng) => {
+                const preset = getAntennaPreset(antennaPlacementPresetId!);
+                if (!preset) return;
+                const draft: RFAntenna = {
+                  id: `ant-${Date.now()}`,
+                  presetId: preset.id,
+                  name: preset.name,
+                  coordinates: [lat, lng],
+                  freqMHz: preset.freqMHz,
+                  powerDbm: preset.powerDbm,
+                  gainDbi: preset.gainDbi,
+                  beamwidthDeg: preset.beamwidthDeg,
+                  heightM: preset.defaultHeightM,
+                  azimuthDeg: 0,
+                };
+                setAntennaEditDraft(draft);
+                setSelectedAntenna(draft);
+                setSelectedTrack(null);
+                setSelectedSensor(null);
+                setAntennaPlacementPresetId(null);
+              }}
+            />
+
           {mapStyle === "MILITARY" && (
             <TileLayer
               attribution='Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
@@ -2785,21 +3391,28 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
 
           {/* Render Sensor Coverage Ranges */}
           {showSensors &&
-            sensors.map((s) => (
-              <Circle
-                key={`range-${s.id}`}
-                center={s.coordinates}
-                radius={s.rangeMeters || 1000}
-                pathOptions={{ color: s.color, fillColor: s.color, fillOpacity: 0.08, weight: 1.5, dashArray: "3, 6" }}
-              >
-                <Tooltip direction="top" opacity={0.9}>
-                  <div style={{ direction: "rtl", fontSize: "11px", fontWeight: "bold" }}>
-                    {s.name}<br/>
-                    <span style={{ fontWeight: "normal", color: "#7f8c8d" }}>רדיוס כיסוי: {s.rangeMeters} מטר</span>
-                  </div>
-                </Tooltip>
-              </Circle>
-            ))}
+            sensors.map((s) => {
+              const isMarked = selectedSensor?.id === s.id;
+              return (
+                <Circle
+                  key={`range-${s.id}`}
+                  center={s.coordinates}
+                  radius={s.rangeMeters || 1000}
+                  pathOptions={
+                    isMarked
+                      ? { color: s.color, fillColor: s.color, fillOpacity: 0.22, weight: 3, dashArray: undefined }
+                      : { color: s.color, fillColor: s.color, fillOpacity: 0.08, weight: 1.5, dashArray: "3, 6" }
+                  }
+                >
+                  <Tooltip direction="top" opacity={0.9}>
+                    <div style={{ direction: "rtl", fontSize: "11px", fontWeight: "bold" }}>
+                      {s.name}<br/>
+                      <span style={{ fontWeight: "normal", color: "#7f8c8d" }}>רדיוס כיסוי: {s.rangeMeters} מטר</span>
+                    </div>
+                  </Tooltip>
+                </Circle>
+              );
+            })}
 
           {/* Render Sensor Towers */}
           {showSensors &&
@@ -2815,6 +3428,78 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                   },
                 }}
               />
+            ))}
+
+          {/* RF antenna coverage + markers — includes the in-progress placement draft, if any,
+              so the placing user sees it before saving (it isn't in `antennas`/synced yet) */}
+          {showAntennas &&
+            [...antennas, ...(antennaEditDraft && !antennas.some(a => a.id === antennaEditDraft.id) ? [antennaEditDraft] : [])].map((ant) => {
+              const rangeMeters = computeEffectiveRangeMeters(ant);
+              const omni = isOmniAntenna(ant.beamwidthDeg);
+              return (
+                <React.Fragment key={ant.id}>
+                  {omni ? (
+                    <Circle
+                      center={ant.coordinates}
+                      radius={rangeMeters}
+                      pathOptions={{ color: ANTENNA_MARKER_COLOR, fillColor: ANTENNA_MARKER_COLOR, fillOpacity: 0.08, weight: 1.5, dashArray: "3, 6" }}
+                    />
+                  ) : (
+                    <Polygon
+                      positions={buildSectorPolygon(ant.coordinates, ant.azimuthDeg, ant.beamwidthDeg, rangeMeters)}
+                      pathOptions={{ color: ANTENNA_MARKER_COLOR, fillColor: ANTENNA_MARKER_COLOR, fillOpacity: 0.12, weight: 1.5 }}
+                    />
+                  )}
+                  <Marker
+                    position={ant.coordinates}
+                    icon={createAntennaIcon(ant)}
+                    draggable={true}
+                    eventHandlers={{
+                      click: () => {
+                        setSelectedAntenna(ant);
+                        setAntennaEditDraft({ ...ant });
+                        setSelectedTrack(null);
+                        setSelectedSensor(null);
+                      },
+                      dragend: (e) => {
+                        const pos = e.target.getLatLng();
+                        const coordinates: [number, number] = [pos.lat, pos.lng];
+                        const moved: RFAntenna = { ...ant, coordinates };
+                        if (selectedAntenna?.id === ant.id) {
+                          setSelectedAntenna(moved);
+                          setAntennaEditDraft((prev) => (prev ? { ...prev, coordinates } : prev));
+                        }
+                        // Only already-saved antennas sync immediately on drop — an in-progress
+                        // placement draft isn't in the store yet, so it stays local until "שמור".
+                        if (antennas.some((a) => a.id === ant.id)) {
+                          onUpsertAntenna?.(moved);
+                        }
+                      },
+                    }}
+                  />
+                </React.Fragment>
+              );
+            })}
+
+          {/* Enemy activity heatmap — density-binned points feed leaflet.heat imperatively;
+              track polylines are plain declarative Polylines like the rest of this file. */}
+          {showEnemyHeatmap && (enemyDisplayMode === "heat" || enemyDisplayMode === "combined") && (
+            <EnemyHeatLayerController points={enemyHeatPoints} />
+          )}
+          {showEnemyHeatmap && (enemyDisplayMode === "tracks" || enemyDisplayMode === "combined") &&
+            enemyTrackGroups.map((track) => (
+              <Polyline
+                key={track.trackId}
+                positions={track.points}
+                pathOptions={{ color: enemyTrackColor(track.iffStatus), weight: 2.5, dashArray: "5, 4" }}
+              >
+                <Tooltip direction="top" opacity={0.9}>
+                  <div style={{ direction: "rtl", fontSize: "11px", fontWeight: "bold" }}>
+                    מסלול {track.trackId}<br />
+                    <span style={{ fontWeight: "normal", color: "#ccc" }}>{track.points.length} גילויים</span>
+                  </div>
+                </Tooltip>
+              </Polyline>
             ))}
 
           {/* Highlight Selected Request Polygon — only for statuses not already rendered above
@@ -2931,6 +3616,30 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
               flights={flights || []}
               onClose={onGanttToggle || (() => {})}
               onFocusLocation={(lat, lng) => setFlyToTarget([lat, lng, 15])}
+            />
+          </div>
+        )}
+
+        {showEnemyHeatmap && (
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            height: "40px",
+            width: "100%",
+            flexShrink: 0,
+            zIndex: 1010,
+            backgroundColor: "var(--color-bg-card)",
+            borderTop: "1px solid var(--color-border)",
+          }}>
+            <EnemyTimelineScrubber
+              boundsStart={MOCK_DATA_RANGE_START_MS}
+              boundsEnd={MOCK_DATA_RANGE_END_MS}
+              rangeStart={enemyPendingRange?.start ?? enemyRangeStart}
+              rangeEnd={enemyPendingRange?.end ?? enemyRangeEnd}
+              onChange={(start, end) => {
+                setEnemyDateRangeMode("custom");
+                setEnemyPendingRange({ start, end });
+              }}
             />
           </div>
         )}
@@ -3069,20 +3778,38 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
 
                         {sensorsDrawerOpen && (
                           <div style={{ padding: "8px", backgroundColor: "rgba(15, 23, 42, 0.9)", display: "flex", flexDirection: "column", gap: "6px" }}>
-                            {sensorList.map((sens) => (
-                              <div key={sens.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.05)", paddingBottom: "4px" }}>
-                                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", fontWeight: "bold" }}>
-                                  <span style={{ color: "#f1c40f" }}>{sens.name}</span>
-                                  <span style={{ color: "#38bdf8" }}>{sens.signalStrength}% עוצמה</span>
+                            {sensorList.map((sens) => {
+                              const fullSensor = sensors.find((sv) => sv.id === sens.id);
+                              return (
+                                <div key={sens.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.05)", paddingBottom: "4px" }}>
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "10px", fontWeight: "bold" }}>
+                                    <span style={{ color: "#f1c40f" }}>{sens.name}</span>
+                                    {fullSensor && (
+                                      <button
+                                        onClick={() => {
+                                          setSelectedSensor(fullSensor);
+                                          setFlyToTarget([fullSensor.coordinates[0], fullSensor.coordinates[1], 15]);
+                                        }}
+                                        title="קפוץ למיקום החיישן"
+                                        style={{
+                                          background: "none",
+                                          border: "none",
+                                          cursor: "pointer",
+                                          padding: "2px",
+                                          display: "flex",
+                                          alignItems: "center",
+                                        }}
+                                      >
+                                        <Crosshair size={12} color="#38bdf8" />
+                                      </button>
+                                    )}
+                                  </div>
+                                  <div style={{ fontSize: "9px", color: "#94a3b8", marginTop: "2px" }}>
+                                    {sens.detectionMethod}
+                                  </div>
                                 </div>
-                                <div style={{ fontSize: "9px", color: "#94a3b8", marginTop: "2px" }}>
-                                  {sens.detectionMethod}
-                                </div>
-                                <div style={{ width: "100%", height: "3px", backgroundColor: "rgba(255,255,255,0.1)", borderRadius: "2px", marginTop: "4px", overflow: "hidden" }}>
-                                  <div style={{ width: `${sens.signalStrength}%`, height: "100%", backgroundColor: sens.signalStrength > 90 ? "#2ecc71" : "#f1c40f" }}></div>
-                                </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
                       </div>
@@ -3309,6 +4036,109 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
             ) : null}
           </div>
         )}
+
+        {selectedAntenna && antennaEditDraft && (() => {
+          const preset = getAntennaPreset(antennaEditDraft.presetId);
+          const edited = computeIsEdited(antennaEditDraft, preset);
+          const existsInStore = antennas.some((a) => a.id === antennaEditDraft.id);
+          const rangeMeters = computeEffectiveRangeMeters(antennaEditDraft);
+          const numField = (label: string, key: keyof RFAntenna, step = 1, min?: number, max?: number) => (
+            <div style={styles.floatingDataRow}>
+              <span style={styles.floatingDataLabel}>{label}</span>
+              <input
+                type="number"
+                step={step}
+                min={min}
+                max={max}
+                value={antennaEditDraft[key] as number}
+                onChange={(e) => setAntennaEditDraft({ ...antennaEditDraft, [key]: parseFloat(e.target.value) || 0 })}
+                style={{ ...styles.adminInput, width: "110px" }}
+              />
+            </div>
+          );
+          return (
+            <div style={{ ...styles.floatingDetailsCard, width: "300px" }}>
+              <div style={{ ...styles.floatingCardHeader, borderBottom: `2px solid ${ANTENNA_MARKER_COLOR}` }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                  <span style={{ fontSize: "10px", color: "#7f8c8d", textTransform: "uppercase" }}>אנטנת RF — {preset?.name}</span>
+                  <input
+                    type="text"
+                    value={antennaEditDraft.name}
+                    onChange={(e) => setAntennaEditDraft({ ...antennaEditDraft, name: e.target.value })}
+                    style={{ ...styles.adminInput, fontSize: "13px", fontWeight: "bold", padding: "3px 6px" }}
+                  />
+                </div>
+                <button
+                  style={{ ...styles.floatingCloseBtn, display: "flex", alignItems: "center", justifyContent: "center" }}
+                  onClick={() => { setSelectedAntenna(null); setAntennaEditDraft(null); }}
+                  title="סגור כרטיס"
+                ><X size={14} /></button>
+              </div>
+
+              <div style={styles.floatingCardBody}>
+                {edited && (
+                  <span style={{
+                    backgroundColor: "rgba(231,76,60,0.15)",
+                    color: "#e74c3c",
+                    fontSize: "10px",
+                    fontWeight: "bold",
+                    padding: "3px 8px",
+                    borderRadius: "12px",
+                    display: "inline-block",
+                    marginBottom: "6px",
+                  }}>
+                    ⚠ שונה מברירת המחדל של הדגם
+                  </span>
+                )}
+
+                {numField("תדר (MHz)", "freqMHz", 1, 1)}
+                {numField("הספק (dBm)", "powerDbm", 1)}
+                {numField("רווח אנטנה (dBi)", "gainDbi", 1)}
+                {numField("רוחב אלומה (מעלות)", "beamwidthDeg", 1, 1, 360)}
+                {numField("גובה אנטנה (מ')", "heightM", 1, 0)}
+                {numField("אזימוט (מעלות)", "azimuthDeg", 1, 0, 360)}
+
+                <div style={{ ...styles.floatingDataRow, marginTop: "6px" }}>
+                  <span style={styles.floatingDataLabel}>טווח כיסוי משוער</span>
+                  <span style={{ ...styles.floatingDataValue, color: ANTENNA_MARKER_COLOR, fontWeight: "bold" }}>
+                    {rangeMeters.toFixed(0)} מ'
+                  </span>
+                </div>
+
+                <div style={{ display: "flex", gap: "6px", marginTop: "10px" }}>
+                  <button
+                    onClick={() => {
+                      onUpsertAntenna?.(antennaEditDraft);
+                      setSelectedAntenna(null);
+                      setAntennaEditDraft(null);
+                    }}
+                    style={styles.floatingActionBtnPrimary}
+                  >
+                    שמור
+                  </button>
+                  {existsInStore && (
+                    <button
+                      onClick={() => {
+                        onRemoveAntenna?.(antennaEditDraft.id);
+                        setSelectedAntenna(null);
+                        setAntennaEditDraft(null);
+                      }}
+                      style={styles.floatingActionBtnDanger}
+                    >
+                      מחק
+                    </button>
+                  )}
+                  <button
+                    onClick={() => { setSelectedAntenna(null); setAntennaEditDraft(null); }}
+                    style={styles.floatingActionBtnSecondary}
+                  >
+                    ביטול
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {showRequestDetailsCard && selectedRequestItem && (
           <div style={{ ...styles.floatingDetailsCard, width: "320px" }}>
@@ -4554,6 +5384,106 @@ const styles: Record<string, React.CSSProperties> = {
     width: "220px",
     boxShadow: "var(--shadow-md)",
     boxSizing: "border-box",
+  },
+  floatingAntennaWidget: {
+    position: "absolute",
+    top: "10px",
+    right: "410px",
+    zIndex: 1000,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-end",
+    direction: "rtl" as const,
+  },
+  floatingAntennaToggle: {
+    backgroundColor: "var(--color-bg-card)",
+    border: "1px solid var(--color-border)",
+    color: "var(--color-text)",
+    padding: "8px 12px",
+    borderRadius: "var(--radius-sm)",
+    fontSize: "var(--text-xs)",
+    fontWeight: "var(--fw-bold)",
+    cursor: "pointer",
+    boxShadow: "var(--shadow-sm)",
+  },
+  floatingAntennaContent: {
+    backgroundColor: "var(--color-bg-card)",
+    border: "1px solid var(--color-border)",
+    borderRadius: "var(--radius-sm)",
+    padding: "12px",
+    marginTop: "5px",
+    display: "flex",
+    flexDirection: "column",
+    gap: "8px",
+    width: "230px",
+    boxShadow: "var(--shadow-md)",
+    boxSizing: "border-box",
+  },
+  floatingEnemyWidget: {
+    position: "absolute",
+    top: "10px",
+    right: "610px",
+    zIndex: 1000,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-end",
+    direction: "rtl" as const,
+  },
+  floatingEnemyToggle: {
+    backgroundColor: "var(--color-bg-card)",
+    border: "1px solid var(--color-border)",
+    color: "var(--color-text)",
+    padding: "8px 12px",
+    borderRadius: "var(--radius-sm)",
+    fontSize: "var(--text-xs)",
+    fontWeight: "var(--fw-bold)",
+    cursor: "pointer",
+    boxShadow: "var(--shadow-sm)",
+  },
+  floatingEnemyContent: {
+    backgroundColor: "var(--color-bg-card)",
+    border: "1px solid var(--color-border)",
+    borderRadius: "var(--radius-sm)",
+    padding: "12px",
+    marginTop: "5px",
+    display: "flex",
+    flexDirection: "column",
+    gap: "9px",
+    width: "270px",
+    boxShadow: "var(--shadow-md)",
+    boxSizing: "border-box",
+    maxHeight: "70vh",
+    overflowY: "auto",
+  },
+  enemyQuickRangeRow: {
+    display: "flex",
+    gap: "4px",
+  },
+  enemyQuickRangeBtn: {
+    flex: 1,
+    border: "1px solid var(--color-border)",
+    borderRadius: "4px",
+    padding: "5px 4px",
+    fontSize: "10px",
+    fontWeight: "bold",
+    cursor: "pointer",
+  },
+  enemyModeRow: {
+    display: "flex",
+    gap: "4px",
+  },
+  enemyModeBtn: {
+    flex: 1,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "3px",
+    border: "1px solid var(--color-border)",
+    borderRadius: "4px",
+    padding: "6px 4px",
+    fontSize: "9px",
+    fontWeight: "bold",
+    cursor: "pointer",
   },
   scenarioBtn: {
     width: "100%",

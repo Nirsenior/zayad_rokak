@@ -2522,7 +2522,7 @@
     "maxAlt": 80,
     "conflicts": [],
     "notes": "טיסת רחפן לא רשום (EVO 4T) - תיאום מרחבי",
-    "status": "EXPIRED",
+    "status": "REMOVE",
     "isArmed": false,
     "operatorLocation": {
       "lat": 33.232,
@@ -2557,5 +2557,1205 @@
     "droneUniqueName": "רחפן לא רשום",
     "additionalDrones": [],
     "reviewerNotes": ""
+  },
+  {
+    "id": "req-9187",
+    "operatorName": "סמל רועי שרון",
+    "unit": "99 / 88 / גדוד 12",
+    "division": "99",
+    "brigade": "88",
+    "battalion": "גדוד 12",
+    "team": "",
+    "radioCallSign": "אפה",
+    "phone": "0509998881",
+    "phoneSecondary": "050666891",
+    "droneModel": "EVO 4T",
+    "frequencies": [
+      5.8,
+      2.4
+    ],
+    "timeWindow": "11:36 - 12:06",
+    "classification": "GREEN",
+    "minAlt": 20,
+    "maxAlt": 80,
+    "conflicts": [],
+    "notes": "טיסת רחפן לא רשום (EVO 4T) - תיאום מרחבי",
+    "status": "REMOVE",
+    "isArmed": false,
+    "operatorLocation": {
+      "lat": 33.232,
+      "lng": 35.566
+    },
+    "polygonType": "CUSTOM",
+    "polygonName": "פוליגון מותאם אישית (משורטט)",
+    "operatorNotes": "",
+    "customPolygonPoints": [
+      [
+        33.228286398550786,
+        35.54795587777624
+      ],
+      [
+        33.276806436957614,
+        35.52458681712357
+      ],
+      [
+        33.2839816695844,
+        35.557234769506
+      ]
+    ],
+    "crossesBorder": false,
+    "takeoffPoint": "",
+    "specialFeatures": "",
+    "missionType": "",
+    "comms": "",
+    "tailNumber": "T-UNKNOWN",
+    "serialNumber": "לא הוגדר",
+    "nightCapable": false,
+    "devices": "ללא",
+    "droneUniqueName": "רחפן לא רשום",
+    "additionalDrones": [],
+    "reviewerNotes": ""
+  },
+  {
+    "id": "req-1441",
+    "operatorName": "סמל רועי שרון",
+    "unit": "99 / 88 / גדוד 12",
+    "division": "99",
+    "brigade": "88",
+    "battalion": "גדוד 12",
+    "team": "",
+    "radioCallSign": "אפה",
+    "phone": "0509998881",
+    "phoneSecondary": "050666891",
+    "droneModel": "EVO 4T",
+    "frequencies": [
+      5.8,
+      2.4
+    ],
+    "timeWindow": "11:36 - 12:06",
+    "classification": "GREEN",
+    "minAlt": 20,
+    "maxAlt": 80,
+    "conflicts": [],
+    "notes": "טיסת רחפן לא רשום (EVO 4T) - תיאום מרחבי",
+    "status": "REMOVE",
+    "isArmed": false,
+    "operatorLocation": {
+      "lat": 33.232,
+      "lng": 35.566
+    },
+    "polygonType": "CUSTOM",
+    "polygonName": "פוליגון מותאם אישית (משורטט)",
+    "operatorNotes": "",
+    "customPolygonPoints": [
+      [
+        33.228286398550786,
+        35.54795587777624
+      ],
+      [
+        33.276806436957614,
+        35.52458681712357
+      ],
+      [
+        33.2839816695844,
+        35.557234769506
+      ]
+    ],
+    "crossesBorder": false,
+    "takeoffPoint": "",
+    "specialFeatures": "",
+    "missionType": "",
+    "comms": "",
+    "tailNumber": "T-UNKNOWN",
+    "serialNumber": "לא הוגדר",
+    "nightCapable": false,
+    "devices": "ללא",
+    "droneUniqueName": "רחפן לא רשום",
+    "additionalDrones": [],
+    "reviewerNotes": ""
+  },
+  {
+    "id": "req-5744",
+    "operatorName": "סמל רועי שרון",
+    "unit": "99 / 88 / גדוד 12",
+    "division": "99",
+    "brigade": "88",
+    "battalion": "גדוד 12",
+    "team": "",
+    "radioCallSign": "אפה",
+    "phone": "0509998881",
+    "phoneSecondary": "050666891",
+    "droneModel": "EVO 4T",
+    "frequencies": [
+      5.8,
+      2.4
+    ],
+    "timeWindow": "09:57 - 10:27",
+    "classification": "GREEN",
+    "minAlt": 20,
+    "maxAlt": 80,
+    "conflicts": [],
+    "notes": "טיסת איבו 11 (EVO 4T) - תיאום מרחבי",
+    "status": "REMOVE",
+    "isArmed": false,
+    "operatorLocation": {
+      "lat": 33.232,
+      "lng": 35.566
+    },
+    "polygonType": "CUSTOM",
+    "polygonName": "פוליגון מותאם אישית (משורטט)",
+    "operatorNotes": "",
+    "customPolygonPoints": [],
+    "crossesBorder": false,
+    "takeoffPoint": "",
+    "specialFeatures": "",
+    "missionType": "איסוף",
+    "comms": "וועידה",
+    "tailNumber": "44444",
+    "serialNumber": "4444444444",
+    "nightCapable": false,
+    "devices": "ללא",
+    "droneUniqueName": "איבו 11",
+    "additionalDrones": [
+      {
+        "droneModel": "EVO 4T",
+        "tailNumber": "44444",
+        "serialNumber": "4444444444",
+        "nightCapable": false,
+        "devices": "ללא",
+        "name": "איבו 11"
+      }
+    ],
+    "reviewerNotes": ""
+  },
+  {
+    "id": "req-2260",
+    "operatorName": "סמל רועי שרון",
+    "unit": "99 / 88 / גדוד 12",
+    "division": "99",
+    "brigade": "88",
+    "battalion": "גדוד 12",
+    "team": "",
+    "radioCallSign": "אפה",
+    "phone": "0509998881",
+    "phoneSecondary": "050666891",
+    "droneModel": "EVO 4T",
+    "frequencies": [
+      5.8,
+      2.4
+    ],
+    "timeWindow": "10:11 - 10:41",
+    "classification": "GREEN",
+    "minAlt": 20,
+    "maxAlt": 80,
+    "conflicts": [],
+    "notes": "טיסת csherv (EVO 4T) - תיאום מרחבי",
+    "status": "REMOVE",
+    "isArmed": false,
+    "operatorLocation": {
+      "lat": 33.232,
+      "lng": 35.566
+    },
+    "polygonType": "CUSTOM",
+    "polygonName": "פוליגון מותאם אישית (משורטט)",
+    "operatorNotes": "",
+    "customPolygonPoints": [
+      [
+        33.27363168222704,
+        35.51992601512834
+      ],
+      [
+        33.27305761726347,
+        35.52679926826146
+      ],
+      [
+        33.275066828123,
+        35.52989223217137
+      ],
+      [
+        33.2813811898048,
+        35.52954856951472
+      ],
+      [
+        33.28970396869046,
+        35.52576828029151
+      ],
+      [
+        33.298312904666524,
+        35.51975418380001
+      ],
+      [
+        33.30835558955855,
+        35.51133444871188
+      ],
+      [
+        33.31409374740176,
+        35.510990786055224
+      ],
+      [
+        33.319114325709506,
+        35.51408374996513
+      ],
+      [
+        33.323274014386875,
+        35.52250348505327
+      ],
+      [
+        33.324421479773,
+        35.530923220141375
+      ],
+      [
+        33.32284371097181,
+        35.53985844921445
+      ],
+      [
+        33.303764791384666,
+        35.544326063750965
+      ],
+      [
+        33.29716509561918,
+        35.528173918888115
+      ],
+      [
+        33.2918562823239,
+        35.530235894828024
+      ],
+      [
+        33.287551601966946,
+        35.53264153342463
+      ],
+      [
+        33.28166819539259,
+        35.53367252139463
+      ],
+      [
+        33.27650195042859,
+        35.53350069006626
+      ],
+      [
+        33.27076131966612,
+        35.53229787076798
+      ],
+      [
+        33.26932610300216,
+        35.52490912364984
+      ],
+      [
+        33.27147891915232,
+        35.51941052114332
+      ]
+    ],
+    "crossesBorder": false,
+    "takeoffPoint": "",
+    "specialFeatures": "",
+    "missionType": "איסוף",
+    "comms": "תדר",
+    "tailNumber": "44444",
+    "serialNumber": "44444444",
+    "nightCapable": false,
+    "devices": "ללא",
+    "droneUniqueName": "csherv",
+    "additionalDrones": [
+      {
+        "droneModel": "EVO 4T",
+        "tailNumber": "44444",
+        "serialNumber": "44444444",
+        "nightCapable": false,
+        "devices": "ללא",
+        "name": "csherv"
+      }
+    ],
+    "reviewerNotes": ""
+  },
+  {
+    "id": "req-4090",
+    "operatorName": "סמל רועי שרון",
+    "unit": "99 / 88 / גדוד 12",
+    "division": "99",
+    "brigade": "88",
+    "battalion": "גדוד 12",
+    "team": "",
+    "radioCallSign": "אפה",
+    "phone": "0509998881",
+    "phoneSecondary": "050666891",
+    "droneModel": "EVO 4T",
+    "frequencies": [
+      5.8,
+      2.4
+    ],
+    "timeWindow": "12:09 - 12:39",
+    "classification": "GREEN",
+    "minAlt": 20,
+    "maxAlt": 80,
+    "conflicts": [],
+    "notes": "טיסת רחפן לא רשום (EVO 4T) - תיאום מרחבי",
+    "status": "REMOVE",
+    "isArmed": false,
+    "operatorLocation": {
+      "lat": 33.232,
+      "lng": 35.566
+    },
+    "polygonType": "CUSTOM",
+    "polygonName": "פוליגון מותאם אישית (משורטט)",
+    "operatorNotes": "טיסת רחפן לא רשום (EVO 4T) - תיאום מרחבי",
+    "customPolygonPoints": [
+      [
+        33.27568522318428,
+        35.52061742319962
+      ],
+      [
+        33.27511122306904,
+        35.5264577493996
+      ],
+      [
+        33.279703118322246,
+        35.52954968679955
+      ],
+      [
+        33.28989052340319,
+        35.525770652199576
+      ],
+      [
+        33.30581492858877,
+        35.518384357299624
+      ],
+      [
+        33.3121265007966,
+        35.51649483999964
+      ],
+      [
+        33.32030217638831,
+        35.51804080869962
+      ],
+      [
+        33.32245354251667,
+        35.530065009699534
+      ],
+      [
+        33.294481641142674,
+        35.53195452699952
+      ],
+      [
+        33.28673398982314,
+        35.53040855829955
+      ],
+      [
+        33.28185548607625,
+        35.53195452699952
+      ],
+      [
+        33.277694193868605,
+        35.53040855829955
+      ],
+      [
+        33.27166714312923,
+        35.52439645779958
+      ],
+      [
+        33.27324569663195,
+        35.52061742319962
+      ]
+    ],
+    "crossesBorder": false,
+    "takeoffPoint": "",
+    "specialFeatures": "",
+    "missionType": "איסוף",
+    "comms": "וועידה",
+    "tailNumber": "T-UNKNOWN",
+    "serialNumber": "לא הוגדר",
+    "nightCapable": false,
+    "devices": "ללא",
+    "droneUniqueName": "רחפן לא רשום",
+    "additionalDrones": [],
+    "reviewerNotes": ""
+  },
+  {
+    "id": "req-6227",
+    "operatorName": "סמל רועי שרון",
+    "unit": "99 / 88 / גדוד 12",
+    "division": "99",
+    "brigade": "88",
+    "battalion": "גדוד 12",
+    "team": "",
+    "radioCallSign": "אפה",
+    "phone": "0509998881",
+    "phoneSecondary": "050666891",
+    "droneModel": "EVO 4T",
+    "frequencies": [
+      5.8,
+      2.4
+    ],
+    "timeWindow": "12:09 - 12:39",
+    "classification": "GREEN",
+    "minAlt": 20,
+    "maxAlt": 80,
+    "conflicts": [],
+    "notes": "טיסת רחפן לא רשום (EVO 4T) - תיאום מרחבי",
+    "status": "REMOVE",
+    "isArmed": false,
+    "operatorLocation": {
+      "lat": 33.232,
+      "lng": 35.566
+    },
+    "polygonType": "CUSTOM",
+    "polygonName": "פוליגון מותאם אישית (משורטט)",
+    "operatorNotes": "טיסת רחפן לא רשום (EVO 4T) - תיאום מרחבי",
+    "customPolygonPoints": [
+      [
+        33.27335440276353,
+        35.52266120910645
+      ],
+      [
+        33.27464607011705,
+        35.51751136779786
+      ],
+      [
+        33.27880797937714,
+        35.514593124389656
+      ],
+      [
+        33.286844208152196,
+        35.514593124389656
+      ],
+      [
+        33.29473621258394,
+        35.515108108520515
+      ],
+      [
+        33.29932759576751,
+        35.51854133605958
+      ],
+      [
+        33.301910142608655,
+        35.52472114562989
+      ],
+      [
+        33.305209952292934,
+        35.52952766418458
+      ],
+      [
+        33.31037462114057,
+        35.530557632446296
+      ],
+      [
+        33.314821729742924,
+        35.53124427795411
+      ],
+      [
+        33.31984238616386,
+        35.52489280700684
+      ],
+      [
+        33.31984238616386,
+        35.51819801330567
+      ],
+      [
+        33.31941205551618,
+        35.513391494750984
+      ],
+      [
+        33.31568243423832,
+        35.509614944458015
+      ],
+      [
+        33.305783819493,
+        35.51047325134278
+      ],
+      [
+        33.293301355781416,
+        35.51167488098145
+      ],
+      [
+        33.28454821829018,
+        35.509099960327156
+      ],
+      [
+        33.27837744624087,
+        35.50978660583497
+      ],
+      [
+        33.27522013836268,
+        35.5115032196045
+      ],
+      [
+        33.2720627163014,
+        35.51476478576661
+      ],
+      [
+        33.27062748671036,
+        35.51922798156739
+      ],
+      [
+        33.27105805806464,
+        35.522317886352546
+      ],
+      [
+        33.27163214990105,
+        35.5254077911377
+      ]
+    ],
+    "crossesBorder": false,
+    "takeoffPoint": "",
+    "specialFeatures": "",
+    "missionType": "איסוף",
+    "comms": "תדר",
+    "tailNumber": "T-UNKNOWN",
+    "serialNumber": "לא הוגדר",
+    "nightCapable": false,
+    "devices": "ללא",
+    "droneUniqueName": "רחפן לא רשום",
+    "additionalDrones": [],
+    "reviewerNotes": ""
+  },
+  {
+    "id": "req-6507",
+    "operatorName": "סמל רועי שרון",
+    "unit": "99 / 88 / גדוד 12",
+    "division": "99",
+    "brigade": "88",
+    "battalion": "גדוד 12",
+    "team": "",
+    "radioCallSign": "אפה",
+    "phone": "0509998881",
+    "phoneSecondary": "050666891",
+    "droneModel": "EVO 4T",
+    "frequencies": [
+      5.8,
+      2.4
+    ],
+    "timeWindow": "12:09 - 12:39",
+    "classification": "GREEN",
+    "minAlt": 20,
+    "maxAlt": 80,
+    "conflicts": [],
+    "notes": "טיסת רחפן לא רשום (EVO 4T) - תיאום מרחבי",
+    "status": "REMOVE",
+    "isArmed": false,
+    "operatorLocation": {
+      "lat": 33.232,
+      "lng": 35.566
+    },
+    "polygonType": "CUSTOM",
+    "polygonName": "פוליגון מותאם אישית (משורטט)",
+    "operatorNotes": "",
+    "customPolygonPoints": [
+      [
+        33.27450255246587,
+        35.5224895477295
+      ],
+      [
+        33.27536365483428,
+        35.52918434143067
+      ],
+      [
+        33.28885314973058,
+        35.52952766418458
+      ],
+      [
+        33.29760585539294,
+        35.53519248962403
+      ],
+      [
+        33.30463608131653,
+        35.54274559020997
+      ],
+      [
+        33.30434914441218,
+        35.55338859558106
+      ],
+      [
+        33.29832325134565,
+        35.55476188659669
+      ],
+      [
+        33.28153463993053,
+        35.54240226745606
+      ],
+      [
+        33.275076621655145,
+        35.53742408752442
+      ],
+      [
+        33.26962281196062,
+        35.53502082824708
+      ],
+      [
+        33.27148862729581,
+        35.52317619323731
+      ]
+    ],
+    "crossesBorder": false,
+    "takeoffPoint": "",
+    "specialFeatures": "",
+    "missionType": "אבטחת כח",
+    "comms": "ללא",
+    "tailNumber": "T-UNKNOWN",
+    "serialNumber": "לא הוגדר",
+    "nightCapable": false,
+    "devices": "ללא",
+    "droneUniqueName": "רחפן לא רשום",
+    "additionalDrones": [],
+    "reviewerNotes": ""
+  },
+  {
+    "id": "req-2519",
+    "operatorName": "סמל רועי שרון",
+    "unit": "99 / 88 / גדוד 12",
+    "division": "99",
+    "brigade": "88",
+    "battalion": "גדוד 12",
+    "team": "",
+    "radioCallSign": "אפה",
+    "phone": "0509998881",
+    "phoneSecondary": "050666891",
+    "droneModel": "EVO 4T",
+    "frequencies": [
+      5.8,
+      2.4
+    ],
+    "timeWindow": "10:03 - 10:33",
+    "classification": "GREEN",
+    "minAlt": 20,
+    "maxAlt": 80,
+    "conflicts": [],
+    "notes": "טיסת רחפן לא רשום (EVO 4T) - תיאום מרחבי",
+    "status": "REMOVE",
+    "isArmed": false,
+    "operatorLocation": {
+      "lat": 33.232,
+      "lng": 35.566
+    },
+    "polygonType": "CUSTOM",
+    "polygonName": "פוליגון מותאם אישית (משורטט)",
+    "operatorNotes": "",
+    "customPolygonPoints": [
+      [
+        33.27571340559266,
+        35.52214622497559
+      ],
+      [
+        33.27571340559266,
+        35.52523612976075
+      ],
+      [
+        33.281027909245246,
+        35.52523612976075
+      ],
+      [
+        33.28504948072194,
+        35.52523612976075
+      ],
+      [
+        33.29208678491023,
+        35.52197456359864
+      ],
+      [
+        33.29740029158253,
+        35.518884658813484
+      ],
+      [
+        33.30687763507225,
+        35.51321983337403
+      ],
+      [
+        33.315636082163586,
+        35.51253318786622
+      ],
+      [
+        33.32166597688626,
+        35.526094436645515
+      ],
+      [
+        33.315636082163586,
+        35.53673744201661
+      ],
+      [
+        33.290363415951084,
+        35.529356002807624
+      ],
+      [
+        33.28045338390804,
+        35.52866935729981
+      ],
+      [
+        33.27183505009279,
+        35.52849769592286
+      ],
+      [
+        33.274276997716804,
+        35.52094459533692
+      ]
+    ],
+    "crossesBorder": false,
+    "takeoffPoint": "",
+    "specialFeatures": "",
+    "missionType": "",
+    "comms": "",
+    "tailNumber": "T-UNKNOWN",
+    "serialNumber": "לא הוגדר",
+    "nightCapable": false,
+    "devices": "ללא",
+    "droneUniqueName": "רחפן לא רשום",
+    "additionalDrones": [],
+    "reviewerNotes": ""
+  },
+  {
+    "id": "req-9334",
+    "operatorName": "סמל רועי שרון",
+    "unit": "99 / 88 / גדוד 12",
+    "division": "99",
+    "brigade": "88",
+    "battalion": "גדוד 12",
+    "team": "",
+    "radioCallSign": "אפה",
+    "phone": "0509998881",
+    "phoneSecondary": "050666891",
+    "droneModel": "EVO 4T",
+    "frequencies": [
+      5.8,
+      2.4
+    ],
+    "timeWindow": "11:35 - 12:05",
+    "classification": "GREEN",
+    "minAlt": 20,
+    "maxAlt": 80,
+    "conflicts": [],
+    "notes": "טיסת רחפן לא רשום (EVO 4T) - תיאום מרחבי",
+    "status": "REMOVE",
+    "isArmed": false,
+    "operatorLocation": {
+      "lat": 33.232,
+      "lng": 35.566
+    },
+    "polygonType": "CUSTOM",
+    "polygonName": "פוליגון מותאם אישית (משורטט)",
+    "operatorNotes": "",
+    "customPolygonPoints": [
+      [
+        33.27567440000132,
+        35.52188873291016
+      ],
+      [
+        33.27653623376831,
+        35.539054870605476
+      ],
+      [
+        33.30238729015927,
+        35.52497863769532
+      ],
+      [
+        33.3311017020665,
+        35.51673889160157
+      ],
+      [
+        33.3311017020665,
+        35.53115844726563
+      ],
+      [
+        33.31818138724843,
+        35.53253173828126
+      ],
+      [
+        33.29980252917094,
+        35.53287506103516
+      ],
+      [
+        33.288313775868055,
+        35.53527832031251
+      ],
+      [
+        33.278259875778915,
+        35.54386138916016
+      ],
+      [
+        33.27280155933415,
+        35.52463531494141
+      ]
+    ],
+    "crossesBorder": false,
+    "takeoffPoint": "",
+    "specialFeatures": "",
+    "missionType": "איסוף",
+    "comms": "וועידה",
+    "tailNumber": "T-UNKNOWN",
+    "serialNumber": "לא הוגדר",
+    "nightCapable": false,
+    "devices": "ללא",
+    "droneUniqueName": "רחפן לא רשום",
+    "additionalDrones": [],
+    "reviewerNotes": ""
+  },
+  {
+    "id": "req-4970",
+    "operatorName": "סמל רועי שרון",
+    "unit": "99 / 88 / גדוד 12",
+    "division": "99",
+    "brigade": "88",
+    "battalion": "גדוד 12",
+    "team": "",
+    "radioCallSign": "אפה",
+    "phone": "0509998881",
+    "phoneSecondary": "050666891",
+    "droneModel": "EVO 4T",
+    "frequencies": [
+      5.8,
+      2.4
+    ],
+    "timeWindow": "16:51 - 17:21",
+    "classification": "GREEN",
+    "minAlt": 20,
+    "maxAlt": 80,
+    "conflicts": [],
+    "notes": "טיסת רחפן לא רשום (EVO 4T) - תיאום מרחבי",
+    "status": "COMPLETED",
+    "isArmed": false,
+    "operatorLocation": {
+      "lat": 33.232,
+      "lng": 35.566
+    },
+    "polygonType": "CUSTOM",
+    "polygonName": "פוליגון מותאם אישית (משורטט)",
+    "operatorNotes": "",
+    "customPolygonPoints": [
+      [
+        33.275970594404896,
+        35.52326202392579
+      ],
+      [
+        33.276545149245614,
+        35.53047180175782
+      ],
+      [
+        33.29665218625482,
+        35.52497863769532
+      ],
+      [
+        33.3138831016292,
+        35.50403594970704
+      ],
+      [
+        33.326516942197394,
+        35.503349304199226
+      ],
+      [
+        33.337139435982266,
+        35.51021575927735
+      ],
+      [
+        33.338000662494395,
+        35.528068542480476
+      ],
+      [
+        33.333981532583124,
+        35.53974151611329
+      ],
+      [
+        33.30699114403424,
+        35.53871154785157
+      ],
+      [
+        33.28659924684059,
+        35.53871154785157
+      ],
+      [
+        33.263904069341926,
+        35.53768157958985
+      ],
+      [
+        33.27079943068814,
+        35.51742553710938
+      ]
+    ],
+    "crossesBorder": false,
+    "takeoffPoint": "",
+    "specialFeatures": "",
+    "missionType": "",
+    "comms": "",
+    "tailNumber": "T-UNKNOWN",
+    "serialNumber": "לא הוגדר",
+    "nightCapable": false,
+    "devices": "ללא",
+    "droneUniqueName": "רחפן לא רשום",
+    "additionalDrones": [],
+    "reviewerNotes": "",
+    "droneLogs": [
+      {
+        "droneModel": "EVO 4T",
+        "action": "המראה",
+        "timestamp": "11:39:45"
+      },
+      {
+        "droneModel": "EVO 4T",
+        "action": "נחיתה",
+        "timestamp": "11:40:13"
+      }
+    ]
+  },
+  {
+    "id": "req-7240",
+    "operatorName": "סמל רועי שרון",
+    "unit": "99 / 88 / גדוד 12",
+    "division": "99",
+    "brigade": "88",
+    "battalion": "גדוד 12",
+    "team": "",
+    "radioCallSign": "אפה",
+    "phone": "0509998881",
+    "phoneSecondary": "050666891",
+    "droneModel": "EVO 4T",
+    "frequencies": [
+      5.8,
+      2.4
+    ],
+    "timeWindow": "17:21 - 17:51",
+    "classification": "GREEN",
+    "minAlt": 20,
+    "maxAlt": 80,
+    "conflicts": [],
+    "notes": "טיסת רחפן לא רשום (EVO 4T) - תיאום מרחבי",
+    "status": "PENDING_REVIEW",
+    "isArmed": false,
+    "operatorLocation": {
+      "lat": 33.232,
+      "lng": 35.566
+    },
+    "polygonType": "CUSTOM",
+    "polygonName": "פוליגון מותאם אישית (משורטט)",
+    "operatorNotes": "טיסת רחפן לא רשום (EVO 4T) - תיאום מרחבי",
+    "customPolygonPoints": [
+      [
+        33.275970594404896,
+        35.52326202392579
+      ],
+      [
+        33.276545149245614,
+        35.53047180175782
+      ],
+      [
+        33.29665218625482,
+        35.52497863769532
+      ],
+      [
+        33.3138831016292,
+        35.50403594970704
+      ],
+      [
+        33.326516942197394,
+        35.503349304199226
+      ],
+      [
+        33.337139435982266,
+        35.51021575927735
+      ],
+      [
+        33.338000662494395,
+        35.528068542480476
+      ],
+      [
+        33.333981532583124,
+        35.53974151611329
+      ],
+      [
+        33.30699114403424,
+        35.53871154785157
+      ],
+      [
+        33.28659924684059,
+        35.53871154785157
+      ],
+      [
+        33.263904069341926,
+        35.53768157958985
+      ],
+      [
+        33.27079943068814,
+        35.51742553710938
+      ]
+    ],
+    "crossesBorder": false,
+    "takeoffPoint": "",
+    "specialFeatures": "",
+    "missionType": "",
+    "comms": "",
+    "tailNumber": "T-UNKNOWN",
+    "serialNumber": "לא הוגדר",
+    "nightCapable": false,
+    "devices": "ללא",
+    "droneUniqueName": "רחפן לא רשום",
+    "additionalDrones": []
+  },
+  {
+    "id": "req-9974",
+    "operatorName": "סמל רועי שרון",
+    "unit": "99 / 88 / גדוד 12",
+    "division": "99",
+    "brigade": "88",
+    "battalion": "גדוד 12",
+    "team": "",
+    "radioCallSign": "אפה",
+    "phone": "0509998881",
+    "phoneSecondary": "050666891",
+    "droneModel": "EVO 4T",
+    "frequencies": [
+      5.8,
+      2.4
+    ],
+    "timeWindow": "09:00 - 09:30",
+    "classification": "GREEN",
+    "minAlt": 20,
+    "maxAlt": 80,
+    "conflicts": [],
+    "notes": "טיסת רחפן לא רשום (EVO 4T) - תיאום מרחבי",
+    "status": "PENDING_REVIEW",
+    "isArmed": false,
+    "operatorLocation": {
+      "lat": 33.232,
+      "lng": 35.566
+    },
+    "polygonType": "CUSTOM",
+    "polygonName": "פוליגון מותאם אישית (משורטט)",
+    "operatorNotes": "",
+    "customPolygonPoints": [
+      [
+        33.274972843850605,
+        35.52104968827375
+      ],
+      [
+        33.27569040872466,
+        35.52568913413864
+      ],
+      [
+        33.28085670171554,
+        35.52414265218366
+      ],
+      [
+        33.292192772948304,
+        35.51915954366213
+      ],
+      [
+        33.30797472302208,
+        35.51177079654402
+      ],
+      [
+        33.31902038888098,
+        35.51177079654402
+      ],
+      [
+        33.31902038888098,
+        35.52517364015365
+      ],
+      [
+        33.31615151930676,
+        35.533937037898404
+      ],
+      [
+        33.30108840505819,
+        35.53290604992841
+      ],
+      [
+        33.284157228831056,
+        35.529641254690176
+      ],
+      [
+        33.27525987050794,
+        35.530672242660174
+      ],
+      [
+        33.27052380999982,
+        35.52826660406357
+      ],
+      [
+        33.27282011384317,
+        35.51915954366213
+      ]
+    ],
+    "crossesBorder": false,
+    "takeoffPoint": "",
+    "specialFeatures": "",
+    "missionType": "",
+    "comms": "",
+    "tailNumber": "T-UNKNOWN",
+    "serialNumber": "לא הוגדר",
+    "nightCapable": false,
+    "devices": "ללא",
+    "droneUniqueName": "רחפן לא רשום",
+    "additionalDrones": []
+  },
+  {
+    "id": "req-1597",
+    "operatorName": "סמל רועי שרון",
+    "unit": "99 / 88 / גדוד 12",
+    "division": "99",
+    "brigade": "88",
+    "battalion": "גדוד 12",
+    "team": "",
+    "radioCallSign": "אפה",
+    "phone": "0509998881",
+    "phoneSecondary": "050666891",
+    "droneModel": "EVO 4T",
+    "frequencies": [
+      5.8,
+      2.4
+    ],
+    "timeWindow": "12:45 - 13:15",
+    "classification": "GREEN",
+    "minAlt": 20,
+    "maxAlt": 80,
+    "conflicts": [],
+    "notes": "טיסת רחפן לא רשום (EVO 4T) - תיאום מרחבי",
+    "status": "PENDING_REVIEW",
+    "isArmed": false,
+    "operatorLocation": {
+      "lat": 33.232,
+      "lng": 35.566
+    },
+    "polygonType": "CUSTOM",
+    "polygonName": "פוליגון מותאם אישית (משורטט)",
+    "operatorNotes": "",
+    "customPolygonPoints": [
+      [
+        33.277523741167045,
+        35.520601272583015
+      ],
+      [
+        33.27809828578609,
+        35.52729606628419
+      ],
+      [
+        33.298061362273074,
+        35.521631240844734
+      ],
+      [
+        33.32002982748,
+        35.51424980163575
+      ],
+      [
+        33.323906040856805,
+        35.525064468383796
+      ],
+      [
+        33.320891223129145,
+        35.53673744201661
+      ],
+      [
+        33.274220036227675,
+        35.527811050415046
+      ],
+      [
+        33.274507319880826,
+        35.520601272583015
+      ]
+    ],
+    "crossesBorder": false,
+    "takeoffPoint": "",
+    "specialFeatures": "",
+    "missionType": "",
+    "comms": "",
+    "tailNumber": "T-UNKNOWN",
+    "serialNumber": "לא הוגדר",
+    "nightCapable": false,
+    "devices": "ללא",
+    "droneUniqueName": "רחפן לא רשום",
+    "additionalDrones": []
   }
 ]

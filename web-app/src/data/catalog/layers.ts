@@ -55,6 +55,14 @@ export const initialMainFolders: MainFolder[] = [
         layers: [
           { id: 'l-kokhoteinu',   name: 'כוחותינו',         color: '#1e90ff', isEditable: true,  visibility: 'techno-tactical', sharing: 'pool', isVisible: true,  isPermanent: true, isInOrganizer: IO },
           { id: 'l-iyumim',       name: 'איתורים ואירועים', color: '#e63946', isEditable: false, visibility: 'techno-tactical', sharing: 'pool', isVisible: true,  isPermanent: true, isInOrganizer: IO },
+          { id: 'l-tmunat-oyev',  name: 'תמונת מצב אויב',   color: '#ff3d3d', isEditable: false, visibility: 'tactical-hq',     sharing: 'brigade', isVisible: true, isPermanent: P,    isInOrganizer: IO,
+            subFilters: [
+              { id: 'st-radar',    label: 'מכ"ם',              isActive: true },
+              { id: 'st-rf',       label: 'איתור RF',          isActive: true },
+              { id: 'st-optical',  label: 'אופטי',             isActive: true },
+              { id: 'st-external', label: 'מערכת חיצונית',     isActive: true },
+            ],
+          },
           { id: 'l-tium',         name: 'תיאום ושליטה',     color: '#333333', isEditable: true,  visibility: 'techno-tactical', sharing: 'pool', isVisible: true,  isPermanent: true, isInOrganizer: IO },
           { id: 'l-ezer-lakhima', name: 'מבצעים ראשי',      color: '#4a90d9', isEditable: true,  visibility: 'techno-tactical', sharing: 'unit', isVisible: true,  isPermanent: true, isInOrganizer: IO },
           { id: 'l-ezer-oyev',    name: 'תמ"א ראשי',         color: '#ff4d4d', isEditable: false, visibility: 'techno-tactical', sharing: 'unit', isVisible: false, isPermanent: true, isInOrganizer: IO },

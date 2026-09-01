@@ -320,10 +320,7 @@ export default function App() {
   const currentDrones: DroneState[] = currentTelemetry?.drones || [];
   const primaryDrone = currentDrones[0] || null;
 
-  const flightState = primaryDrone?.status || "APPROVED";
-  const transponderActive = primaryDrone?.transponderActive || false;
   const battery = primaryDrone?.battery ?? 100;
-  const altitude = primaryDrone?.altitude ?? 0;
 
 
   // Form Fields
@@ -1616,7 +1613,7 @@ export default function App() {
                           type: "REGISTER_OPERATOR",
                           operator: { name: operatorName, unit: operatorUnit, drones: myDrones }
                         }));
-                        alert(`סונכרנו ${myDrones.length} רחפנים עם החמ"ק בהצלחה!`);
+                        alert(`סונכרנו ${myDrones.length} רחפנים עם המפקדה בהצלחה!`);
                       } else {
                         alert("אין חיבור פעיל לשרת.");
                       }
@@ -1637,7 +1634,7 @@ export default function App() {
                       gap: "6px"
                     }}
                   >
-                    ⬆ סנכרן עם החמ"ק ({myDrones.length} רחפנים)
+                    ⬆ סנכרן עם המפקדה ({myDrones.length} רחפנים)
                   </button>
                 )}
               </div>
@@ -1900,50 +1897,9 @@ export default function App() {
                 })}
               </MapContainer>
 
-              {/* Float Overlay Telemetry Card */}
-              <div style={styles.telemetryOverlayCard}>
-                <h4 style={styles.telemetryTitle}>טלמטריית כלי</h4>
-                <div style={styles.telemetryRow}><strong>מצב טיסה:</strong> {flightState === "FLYING" ? "באוויר" : flightState === "LANDED" ? "מקורקע" : "מאושר"}</div>
-                <div style={styles.telemetryRow}><strong>גובה (AGL):</strong> {transponderActive && flightState === "FLYING" ? `${altitude} מ'` : "--"}</div>
-                <div style={styles.telemetryRow}><strong>כלי פעיל:</strong> <span style={{ fontSize: "9px" }}>{currentRequest?.droneModel.split(" ")[1] || "--"}</span></div>
-              </div>
-
               {/* Bottom Status Controller Panel */}
               <div style={styles.controlPanel}>
-                {/* Request Selector Dropdown */}
-                {allRequests.length > 0 && (
-                  <div style={{ marginBottom: "6px", display: "flex", alignItems: "center", gap: "6px", width: "100%" }}>
-                    <span style={{ fontSize: "10px", color: "#888", whiteSpace: "nowrap" }}>מרחב פעיל:</span>
-                    <select 
-                      value={selectedRequestForMapId || ""} 
-                      onChange={(e) => setSelectedRequestForMapId(e.target.value || null)}
-                      style={{
-                        flex: 1,
-                        backgroundColor: "#16161d",
-                        border: "1px solid #2e2e38",
-                        color: "#fff",
-                        borderRadius: "4px",
-                        padding: "4px 8px",
-                        fontSize: "11px",
-                        outline: "none"
-                      }}
-                    >
-                      <option value="">-- בחר בקשת טיסה --</option>
-                      {allRequests.map((req) => (
-                        <option key={req.id} value={req.id}>
-                          {req.id} ({req.polygonName}) [{req.status === "APPROVED" ? "מאושרת" : req.status === "REJECTED" ? "מבוטלת" : "ממתין"}]
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
-                {!currentRequest ? (
-                  <div style={styles.noRequestBanner}>
-                    <span style={{ fontSize: "11px", flex: 1 }}>אין תיאום טיסה מאושר לגזרה זו.</span>
-                    <button style={styles.panelActionBtn} onClick={() => setActiveTab("FORM")}>תאם מרחב</button>
-                  </div>
-                ) : (
+                {currentRequest && (
                   <div style={styles.requestStatusCard}>
                     <div style={styles.reqStatusHeader}>
                       <strong style={{ fontSize: "12px" }}>מזהה: {currentRequest.id}</strong>
@@ -2925,29 +2881,6 @@ const styles: Record<string, React.CSSProperties> = {
     position: "relative",
   },
   // expiryWarningBanner and renewalMiniBtn styles removed
-  telemetryOverlayCard: {
-    position: "absolute",
-    top: "10px",
-    right: "10px",
-    zIndex: 1000,
-    backgroundColor: "rgba(22, 22, 29, 0.9)",
-    border: "1px solid #2e2e38",
-    padding: "8px 12px",
-    borderRadius: "6px",
-    width: "140px",
-    boxShadow: "0 4px 10px rgba(0,0,0,0.5)",
-  },
-  telemetryTitle: {
-    margin: "0 0 6px 0",
-    fontSize: "11px",
-    borderBottom: "1px solid #2e2e38",
-    paddingBottom: "4px",
-    color: "#3498db",
-  },
-  telemetryRow: {
-    fontSize: "10px",
-    marginBottom: "4px",
-  },
   controlPanel: {
     position: "absolute",
     bottom: "10px",
@@ -2955,26 +2888,6 @@ const styles: Record<string, React.CSSProperties> = {
     transform: "translateX(-50%)",
     zIndex: 1000,
     width: "92%",
-  },
-  noRequestBanner: {
-    backgroundColor: "#16161d",
-    border: "1px solid #2e2e38",
-    borderRadius: "6px",
-    padding: "8px 12px",
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
-  },
-  panelActionBtn: {
-    backgroundColor: "#3498db",
-    color: "#fff",
-    border: "none",
-    padding: "6px 12px",
-    borderRadius: "4px",
-    cursor: "pointer",
-    fontWeight: "bold",
-    fontSize: "11px",
   },
   requestStatusCard: {
     backgroundColor: "#16161d",

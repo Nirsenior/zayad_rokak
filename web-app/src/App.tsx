@@ -7,6 +7,7 @@ import { PilotsConsole } from "./components/PilotsConsole";
 import { DebriefingConsole } from "./components/DebriefingConsole";
 import { OperatorsDronesConsole } from "./components/OperatorsDronesConsole";
 import type { Operator, RegisteredDrone } from "./components/OperatorsDronesConsole";
+import type { RFAntenna } from "./utils/rfCoverage";
 import {
   X,
   AlertTriangle
@@ -694,6 +695,20 @@ export default function App() {
               }
               return prev;
             });
+          } else if (message.type === "INITIAL_ANTENNAS_LOAD") {
+            setAntennas(message.antennas || []);
+          } else if (message.type === "ANTENNA_UPSERT") {
+            setAntennas((prev) => {
+              const idx = prev.findIndex((a) => a.id === message.antenna.id);
+              if (idx !== -1) {
+                const next = [...prev];
+                next[idx] = message.antenna;
+                return next;
+              }
+              return [...prev, message.antenna];
+            });
+          } else if (message.type === "ANTENNA_REMOVE") {
+            setAntennas((prev) => prev.filter((a) => a.id !== message.antennaId));
           }
         } catch (err) {
           console.error("HQ WS parse error:", err);
@@ -770,6 +785,9 @@ export default function App() {
 
   // Shared Requests State
   const [requests, setRequests] = useState<FlightRequest[]>([]);
+
+  // Shared RF Antenna Planning State
+  const [antennas, setAntennas] = useState<RFAntenna[]>([]);
 
   // Shared Active Flights State
   const [flights, setFlights] = useState<ActiveFlight[]>([
@@ -1033,6 +1051,28 @@ export default function App() {
     );
   };
 
+  const handleUpsertAntenna = (antenna: RFAntenna) => {
+    setAntennas((prev) => {
+      const idx = prev.findIndex((a) => a.id === antenna.id);
+      if (idx !== -1) {
+        const next = [...prev];
+        next[idx] = antenna;
+        return next;
+      }
+      return [...prev, antenna];
+    });
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({ type: "ANTENNA_UPSERT", antenna }));
+    }
+  };
+
+  const handleRemoveAntenna = (id: string) => {
+    setAntennas((prev) => prev.filter((a) => a.id !== id));
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({ type: "ANTENNA_REMOVE", antennaId: id }));
+    }
+  };
+
   const renderActiveScreen = () => {
     switch (activeScreen) {
       case "MAP":
@@ -1050,6 +1090,9 @@ export default function App() {
             onGanttToggle={() => setGanttOpen(!ganttOpen)}
             onCreateRequest={handleCreateRequest}
             onUpdateRequestCoordinates={handleUpdateRequestCoordinates}
+            antennas={antennas}
+            onUpsertAntenna={handleUpsertAntenna}
+            onRemoveAntenna={handleRemoveAntenna}
           />
         );
       case "REQUESTS":
@@ -1067,6 +1110,9 @@ export default function App() {
             onGanttToggle={() => setGanttOpen(!ganttOpen)}
             onCreateRequest={handleCreateRequest}
             onUpdateRequestCoordinates={handleUpdateRequestCoordinates}
+            antennas={antennas}
+            onUpsertAntenna={handleUpsertAntenna}
+            onRemoveAntenna={handleRemoveAntenna}
           />
         );
 

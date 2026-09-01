@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_FILE = path.join(__dirname, "persisted_requests.json");
+const ANTENNA_DATA_FILE = path.join(__dirname, "persisted_antennas.json");
 
 // Load initially saved requests if they exist
 let persistedRequests = [];
@@ -27,6 +28,26 @@ function saveRequests() {
   }
 }
 
+// Load initially saved RF antennas if they exist
+let persistedAntennas = [];
+try {
+  if (fs.existsSync(ANTENNA_DATA_FILE)) {
+    const raw = fs.readFileSync(ANTENNA_DATA_FILE, "utf-8");
+    persistedAntennas = JSON.parse(raw);
+    console.log(`Loaded ${persistedAntennas.length} antennas from disk`);
+  }
+} catch (e) {
+  console.error("Failed to load persisted antennas:", e);
+}
+
+function saveAntennas() {
+  try {
+    fs.writeFileSync(ANTENNA_DATA_FILE, JSON.stringify(persistedAntennas, null, 2), "utf-8");
+  } catch (e) {
+    console.error("Failed to write antennas to disk:", e);
+  }
+}
+
 const wss = new WebSocketServer({ port: 8080 });
 
 console.log("WebSocket relay server running on ws://localhost:8080");
@@ -39,6 +60,13 @@ wss.on("connection", (ws) => {
     ws.send(JSON.stringify({
       type: "INITIAL_REQUESTS_LOAD",
       requests: persistedRequests
+    }));
+  }
+
+  if (persistedAntennas.length > 0) {
+    ws.send(JSON.stringify({
+      type: "INITIAL_ANTENNAS_LOAD",
+      antennas: persistedAntennas
     }));
   }
 
@@ -87,6 +115,20 @@ wss.on("connection", (ws) => {
           saveRequests();
           console.log(`Deactivated request/flight: ${reqId}`);
         }
+      } else if (parsed.type === "ANTENNA_UPSERT") {
+        const ant = parsed.antenna;
+        const idx = persistedAntennas.findIndex((a) => a.id === ant.id);
+        if (idx !== -1) {
+          persistedAntennas[idx] = ant;
+        } else {
+          persistedAntennas.push(ant);
+        }
+        saveAntennas();
+        console.log(`Upserted antenna: ${ant.id}`);
+      } else if (parsed.type === "ANTENNA_REMOVE") {
+        persistedAntennas = persistedAntennas.filter((a) => a.id !== parsed.antennaId);
+        saveAntennas();
+        console.log(`Removed antenna: ${parsed.antennaId}`);
       }
 
       // Broadcast to all other connected clients
