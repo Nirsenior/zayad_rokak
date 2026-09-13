@@ -8,13 +8,19 @@ import { DebriefingConsole } from "./components/DebriefingConsole";
 import { OperatorsDronesConsole } from "./components/OperatorsDronesConsole";
 import type { Operator, RegisteredDrone } from "./components/OperatorsDronesConsole";
 import type { RFAntenna } from "./utils/rfCoverage";
+import type { SpaceArea } from "./utils/spaceOrganization";
 import {
   X,
-  AlertTriangle
+  AlertTriangle,
+  Mail,
+  Route,
+  Drone,
+  Antenna,
+  type LucideIcon,
 } from "lucide-react";
 
 
-type ScreenType = "MAP" | "REQUESTS" | "INCIDENTS" | "OPERATORS" | "PILOTS";
+type ScreenType = "MAP" | "REQUESTS" | "SPACE_ORG" | "PENETRATION_ROUTES" | "RF_PLANNING" | "INCIDENTS" | "OPERATORS" | "PILOTS";
 
 interface Conflict {
   type: string;
@@ -55,9 +61,6 @@ interface ActiveFlight {
   battery: number;
   lastPingSeconds: number;
   status: "ACTIVE" | "COMMS_LOSS" | "ANOMALOUS" | "COMPLETED" | "LANDED";
-  tigerStatus?: string;
-  tigerReason?: string;
-  tigerResponseTime?: string;
 }
 
 export default function App() {
@@ -553,17 +556,9 @@ export default function App() {
 
             lastHeartbeatsRef.current[message.flightId] = Date.now();
 
-            setLiveTracks((prev) => ({
-              ...prev,
-              [message.flightId]: {
-                id: `אול''ר - ${message.operatorName}`,
-                type: message.droneModel,
-                iffStatus: "BLUE_CERTAIN",
-                coordinates: { lat: message.lat, lng: message.lng, altMsl: message.alt },
-                speedKts: 13,
-                heading: message.heading ?? 45,
-              },
-            }));
+            // A submitted/active flight request only ever renders as its approved corridor
+            // polygon — it does not represent a confirmed identification, so it must not
+            // spawn a "כוחותינו" force track. Tracks come exclusively from sensor detection.
           } else if (message.type === "OPERATOR_HEARTBEAT") {
             lastHeartbeatsRef.current[message.flightId] = Date.now();
             setFlights((prev) =>
@@ -644,57 +639,6 @@ export default function App() {
               }
               return copy;
             });
-          } else if (message.type === "TIGER_CONFIRMED") {
-            setFlights((prev) =>
-              prev.map((f) =>
-                f.id === message.flightId
-                  ? { ...f, currentAlt: message.altitude, tigerStatus: "CONFIRMED" }
-                  : f
-              )
-            );
-            setLiveTracks((prev) => {
-              if (prev[message.flightId]) {
-                return {
-                  ...prev,
-                  [message.flightId]: {
-                    ...prev[message.flightId],
-                    coordinates: {
-                      ...prev[message.flightId].coordinates,
-                      altMsl: message.altitude,
-                    },
-                    tigerStatus: "CONFIRMED",
-                  },
-                };
-              }
-              return prev;
-            });
-          } else if (message.type === "TIGER_RESPONSE") {
-            setFlights((prev) =>
-              prev.map((f) =>
-                f.id === message.flightId
-                  ? {
-                    ...f,
-                    tigerStatus: message.status === "EXECUTED" ? "CONFIRMED" : message.status,
-                    tigerReason: message.reason || "",
-                    tigerResponseTime: message.timestamp || "",
-                  }
-                  : f
-              )
-            );
-            setLiveTracks((prev) => {
-              if (prev[message.flightId]) {
-                return {
-                  ...prev,
-                  [message.flightId]: {
-                    ...prev[message.flightId],
-                    tigerStatus: message.status === "EXECUTED" ? "CONFIRMED" : message.status,
-                    tigerReason: message.reason || "",
-                    tigerResponseTime: message.timestamp || "",
-                  },
-                };
-              }
-              return prev;
-            });
           } else if (message.type === "INITIAL_ANTENNAS_LOAD") {
             setAntennas(message.antennas || []);
           } else if (message.type === "ANTENNA_UPSERT") {
@@ -709,6 +653,20 @@ export default function App() {
             });
           } else if (message.type === "ANTENNA_REMOVE") {
             setAntennas((prev) => prev.filter((a) => a.id !== message.antennaId));
+          } else if (message.type === "INITIAL_SPACE_AREAS_LOAD") {
+            setSpaceAreas(message.spaceAreas || []);
+          } else if (message.type === "SPACE_AREA_UPSERT") {
+            setSpaceAreas((prev) => {
+              const idx = prev.findIndex((a) => a.id === message.spaceArea.id);
+              if (idx !== -1) {
+                const next = [...prev];
+                next[idx] = message.spaceArea;
+                return next;
+              }
+              return [...prev, message.spaceArea];
+            });
+          } else if (message.type === "SPACE_AREA_REMOVE") {
+            setSpaceAreas((prev) => prev.filter((a) => a.id !== message.spaceAreaId));
           }
         } catch (err) {
           console.error("HQ WS parse error:", err);
@@ -788,6 +746,9 @@ export default function App() {
 
   // Shared RF Antenna Planning State
   const [antennas, setAntennas] = useState<RFAntenna[]>([]);
+
+  // Shared ארגון המרחב (space organization) State
+  const [spaceAreas, setSpaceAreas] = useState<SpaceArea[]>([]);
 
   // Shared Active Flights State
   const [flights, setFlights] = useState<ActiveFlight[]>([
@@ -1073,6 +1034,28 @@ export default function App() {
     }
   };
 
+  const handleUpsertSpaceArea = (spaceArea: SpaceArea) => {
+    setSpaceAreas((prev) => {
+      const idx = prev.findIndex((a) => a.id === spaceArea.id);
+      if (idx !== -1) {
+        const next = [...prev];
+        next[idx] = spaceArea;
+        return next;
+      }
+      return [...prev, spaceArea];
+    });
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({ type: "SPACE_AREA_UPSERT", spaceArea }));
+    }
+  };
+
+  const handleRemoveSpaceArea = (id: string) => {
+    setSpaceAreas((prev) => prev.filter((a) => a.id !== id));
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({ type: "SPACE_AREA_REMOVE", spaceAreaId: id }));
+    }
+  };
+
   const renderActiveScreen = () => {
     switch (activeScreen) {
       case "MAP":
@@ -1093,6 +1076,9 @@ export default function App() {
             antennas={antennas}
             onUpsertAntenna={handleUpsertAntenna}
             onRemoveAntenna={handleRemoveAntenna}
+            spaceAreas={spaceAreas}
+            onUpsertSpaceArea={handleUpsertSpaceArea}
+            onRemoveSpaceArea={handleRemoveSpaceArea}
           />
         );
       case "REQUESTS":
@@ -1113,6 +1099,78 @@ export default function App() {
             antennas={antennas}
             onUpsertAntenna={handleUpsertAntenna}
             onRemoveAntenna={handleRemoveAntenna}
+            spaceAreas={spaceAreas}
+            onUpsertSpaceArea={handleUpsertSpaceArea}
+            onRemoveSpaceArea={handleRemoveSpaceArea}
+          />
+        );
+      case "SPACE_ORG":
+        return (
+          <TacticalMap
+            onTriggerAlert={handleTriggerAlert}
+            liveTracks={Object.values(liveTracks)}
+            approvedCorridors={approvedCorridors}
+            flights={flights}
+            requests={requests}
+            onReviewRequest={handleReviewRequest}
+            showSpaceOrgPanel={true}
+            onRemoveLiveTrack={handleRemoveLiveTrack}
+            showGantt={ganttOpen}
+            onGanttToggle={() => setGanttOpen(!ganttOpen)}
+            onCreateRequest={handleCreateRequest}
+            onUpdateRequestCoordinates={handleUpdateRequestCoordinates}
+            antennas={antennas}
+            onUpsertAntenna={handleUpsertAntenna}
+            onRemoveAntenna={handleRemoveAntenna}
+            spaceAreas={spaceAreas}
+            onUpsertSpaceArea={handleUpsertSpaceArea}
+            onRemoveSpaceArea={handleRemoveSpaceArea}
+          />
+        );
+      case "PENETRATION_ROUTES":
+        return (
+          <TacticalMap
+            onTriggerAlert={handleTriggerAlert}
+            liveTracks={Object.values(liveTracks)}
+            approvedCorridors={approvedCorridors}
+            flights={flights}
+            requests={requests}
+            onReviewRequest={handleReviewRequest}
+            showPenetrationRoutesPanel={true}
+            onRemoveLiveTrack={handleRemoveLiveTrack}
+            showGantt={ganttOpen}
+            onGanttToggle={() => setGanttOpen(!ganttOpen)}
+            onCreateRequest={handleCreateRequest}
+            onUpdateRequestCoordinates={handleUpdateRequestCoordinates}
+            antennas={antennas}
+            onUpsertAntenna={handleUpsertAntenna}
+            onRemoveAntenna={handleRemoveAntenna}
+            spaceAreas={spaceAreas}
+            onUpsertSpaceArea={handleUpsertSpaceArea}
+            onRemoveSpaceArea={handleRemoveSpaceArea}
+          />
+        );
+      case "RF_PLANNING":
+        return (
+          <TacticalMap
+            onTriggerAlert={handleTriggerAlert}
+            liveTracks={Object.values(liveTracks)}
+            approvedCorridors={approvedCorridors}
+            flights={flights}
+            requests={requests}
+            onReviewRequest={handleReviewRequest}
+            showRfPlanningPanel={true}
+            onRemoveLiveTrack={handleRemoveLiveTrack}
+            showGantt={ganttOpen}
+            onGanttToggle={() => setGanttOpen(!ganttOpen)}
+            onCreateRequest={handleCreateRequest}
+            onUpdateRequestCoordinates={handleUpdateRequestCoordinates}
+            antennas={antennas}
+            onUpsertAntenna={handleUpsertAntenna}
+            onRemoveAntenna={handleRemoveAntenna}
+            spaceAreas={spaceAreas}
+            onUpsertSpaceArea={handleUpsertSpaceArea}
+            onRemoveSpaceArea={handleRemoveSpaceArea}
           />
         );
 
@@ -1137,7 +1195,12 @@ export default function App() {
         return 'תמנ"צ שמיים חטיבתית';
       case "REQUESTS":
         return "מרכז אישורי טיסה";
-
+      case "SPACE_ORG":
+        return "ארגון המרחב";
+      case "PENETRATION_ROUTES":
+        return "נתיבי חדירה";
+      case "RF_PLANNING":
+        return "תכנון RF";
       case "PILOTS":
         return "מאגר מטיסים";
       case "INCIDENTS":
@@ -1147,16 +1210,19 @@ export default function App() {
     }
   };
 
-  const navItems: { screen: ScreenType; icon: string; label: string; badge?: number }[] = [
-    { screen: "MAP", icon: figmaAssets.sideMenuAreaIcon, label: "מפה" },
+  const navItems: { screen: ScreenType; icon?: string; Icon?: LucideIcon; label: string; badge?: number }[] = [
+    { screen: "MAP", icon: figmaAssets.sideMenuMapIcon, label: "מפה" },
     {
       screen: "REQUESTS",
-      icon: figmaAssets.sideMenuMissionIcon,
+      Icon: Mail,
       label: "בקשות",
       badge: requests.filter((r) => r.status === "PENDING_REVIEW").length,
     },
-    { screen: "PILOTS", icon: figmaAssets.sideMenuCrewTreeIcon, label: "מטיסים" },
-    { screen: "OPERATORS", icon: figmaAssets.sideMenuCrewTreeIcon, label: "מאגר רחפנים" },
+    { screen: "SPACE_ORG", icon: figmaAssets.tahkirSpaceIcon, label: "ארגון המרחב" },
+    { screen: "PENETRATION_ROUTES", Icon: Route, label: "נתיבי חדירה" },
+    { screen: "RF_PLANNING", Icon: Antenna, label: "תכנון RF" },
+    { screen: "PILOTS", icon: figmaAssets.mpIconPerson, label: "מטיסים" },
+    { screen: "OPERATORS", Icon: Drone, label: "מאגר רחפנים" },
     { screen: "INCIDENTS", icon: figmaAssets.sideMenuJournalIcon, label: "תחקור", badge: 3 },
   ];
 
@@ -1184,7 +1250,7 @@ export default function App() {
         {/* Sidebar Navigation */}
         <nav style={styles.sidebar}>
           <ul style={styles.navQueue}>
-            {navItems.map(({ screen, icon, label, badge }) => {
+            {navItems.map(({ screen, icon, Icon, label, badge }) => {
               const isActive = activeScreen === screen;
               return (
                 <li
@@ -1221,17 +1287,25 @@ export default function App() {
                       justifyContent: 'center',
                     }}
                   >
-                    <img
-                      src={icon}
-                      alt=""
-                      width={20}
-                      height={20}
-                      style={{
-                        display: 'block',
-                        objectFit: 'contain',
-                        opacity: isActive ? 1 : 0.7,
-                      }}
-                    />
+                    {Icon ? (
+                      <Icon
+                        size={20}
+                        color="#e6f5ff"
+                        style={{ opacity: isActive ? 1 : 0.7 }}
+                      />
+                    ) : (
+                      <img
+                        src={icon}
+                        alt=""
+                        width={20}
+                        height={20}
+                        style={{
+                          display: 'block',
+                          objectFit: 'contain',
+                          opacity: isActive ? 1 : 0.7,
+                        }}
+                      />
+                    )}
                     {badge !== undefined && badge > 0 && (
                       <span style={{
                         position: 'absolute',

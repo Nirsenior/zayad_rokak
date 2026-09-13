@@ -75,7 +75,7 @@ export const DebriefingConsole: React.FC<{
         { time: "13:14:02", altitude: 40, battery: 85, frequency: 5.8, status: "חפיפת מרחב סריקה" },
         { time: "13:14:22", altitude: 65, battery: 82, frequency: 5.8, status: "שיבוש תדר קל" },
         { time: "13:14:42", altitude: 95, battery: 78, frequency: 5.8, status: "התראת רדאר - עוין" },
-        { time: "13:15:02", altitude: 110, battery: 75, frequency: 5.8, status: "נוהל נמר פעיל" },
+        { time: "13:15:02", altitude: 110, battery: 75, frequency: 5.8, status: "נוהל טיפול במטרה עוינת פעיל" },
         { time: "13:15:22", altitude: 120, battery: 72, frequency: 5.8, status: "נטרול מוצלח" }
       ]
     },
@@ -272,7 +272,7 @@ export const DebriefingConsole: React.FC<{
       ]);
       // Trigger system-wide alert notification
       onTriggerAlert(`דו"ח תחקיר AI הושלם עבור אירוע ${selectedEvent.id} בגזרת ${selectedEvent.sector}`, {
-        alertType: "TIGER",
+        alertType: "DEBRIEF",
         threatLocation: { lat: selectedEvent.path[0][0], lng: selectedEvent.path[0][1] }
       });
     }, 2200);

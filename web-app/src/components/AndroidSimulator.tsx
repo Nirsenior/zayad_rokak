@@ -196,7 +196,7 @@ export const AndroidSimulator: React.FC<AndroidSimulatorProps> = ({
         </button>
       </div>
 
-      {/* Critical Alert Overlay Screen (Tiger / Hammer) */}
+      {/* Critical Alert Overlay Screen */}
       {activeAlert && (
         <div style={styles.alertOverlay}>
           <div style={{ ...styles.alertIcon, display: "flex", justifyContent: "center", marginBottom: "15px" }}>

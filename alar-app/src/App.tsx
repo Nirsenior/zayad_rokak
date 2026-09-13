@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { MapContainer, TileLayer, Marker, Polygon, Polyline, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { Map as MapIcon, ClipboardList, Wifi, MapPin, Battery, AlertTriangle, AlertOctagon, Bell, User, CheckCircle, Clock, Cpu } from "lucide-react";
+import { Map as MapIcon, ClipboardList, Wifi, MapPin, Battery, AlertTriangle, AlertOctagon, User, Clock, Cpu } from "lucide-react";
 
 
 // CSS Custom Styles to embed directly for clean operation
@@ -37,28 +37,6 @@ const inlineStyles = `
   @keyframes pulse-glow {
     0%, 100% { transform: scale(1); filter: drop-shadow(0 0 5px rgba(231, 76, 60, 0.5)); }
     50% { transform: scale(1.05); filter: drop-shadow(0 0 15px rgba(231, 76, 60, 0.9)); }
-  }
-  @keyframes tiger-border-glow {
-    0%, 100% { border-color: #f1c40f; box-shadow: 0 0 20px rgba(241, 196, 15, 0.4), inset 0 0 15px rgba(241, 196, 15, 0.2); }
-    50% { border-color: #e74c3c; box-shadow: 0 0 40px rgba(230, 76, 60, 0.8), inset 0 0 25px rgba(230, 76, 60, 0.4); }
-  }
-  .tiger-alert-box {
-    animation: tiger-border-glow 2s infinite ease-in-out;
-  }
-  @keyframes text-glow-pulse {
-    0%, 100% { text-shadow: 0 0 5px rgba(241, 196, 15, 0.5); }
-    50% { text-shadow: 0 0 15px rgba(241, 196, 15, 0.9); }
-  }
-  .tiger-instruction-text {
-    animation: text-glow-pulse 1.5s infinite ease-in-out;
-  }
-  @keyframes button-pulse {
-    0% { transform: scale(1); box-shadow: 0 4px 15px rgba(46, 204, 113, 0.4); }
-    50% { transform: scale(1.03); box-shadow: 0 6px 25px rgba(46, 204, 113, 0.7); }
-    100% { transform: scale(1); box-shadow: 0 4px 15px rgba(46, 204, 113, 0.4); }
-  }
-  .tiger-btn-confirm {
-    animation: button-pulse 1.8s infinite ease-in-out;
   }
 `;
 
@@ -224,20 +202,6 @@ function PolygonDrawer({ onAddPoint }: PolygonDrawerProps) {
   return null;
 }
 
-const isPointInPolygon = (point: [number, number], polygon: [number, number][]): boolean => {
-  const [x, y] = point;
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const xi = polygon[i][0], yi = polygon[i][1];
-    const xj = polygon[j][0], yj = polygon[j][1];
-    
-    const intersect = ((yi > y) !== (yj > y))
-        && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
-    if (intersect) inside = !inside;
-  }
-  return inside;
-};
-
 const getRequestGeometry = (req: FlightRequest): [number, number][] => {
   if (req.polygonType === "CUSTOM" && req.customPolygonPoints && req.customPolygonPoints.length > 0) {
     return req.customPolygonPoints;
@@ -270,7 +234,7 @@ const dronePresets = [
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<"MAP" | "FORM" | "ALERTS" | "DRONES" | "PROFILE">("MAP");
+  const [activeTab, setActiveTab] = useState<"MAP" | "FORM" | "DRONES" | "PROFILE">("MAP");
   const [wsConnected, setWsConnected] = useState(false);
   const [gpsLocked] = useState(true);
   const [allRequests, setAllRequests] = useState<FlightRequest[]>([]);
@@ -279,24 +243,6 @@ export default function App() {
   const [showPolygonDrawer, setShowPolygonDrawer] = useState(false);
   const [customPolygonPoints, setCustomPolygonPoints] = useState<[number, number][]>([]);
   const [activeAlert, setActiveAlert] = useState<string | null>(null);
-  const [activeTigerRequestIds, setActiveTigerRequestIds] = useState<string[]>([]);
-  const [tigerRefusalReason, setTigerRefusalReason] = useState("");
-  const [systemAlerts, setSystemAlerts] = useState<any[]>([
-    {
-      id: "alt-1",
-      time: "16:45",
-      message: "נוהל נמר פעיל! זוהה כלי עוין/לא מזוהה (rad-track-4011) בגזרת גבול הצפון.",
-      type: "TIGER",
-      status: "ACTIVE"
-    },
-    {
-      id: "alt-2",
-      time: "15:30",
-      message: "נוהל נמר במרחב גזרת מטולה הסתיים. חזרה לשגרה אווירית מאושרת.",
-      type: "TIGER",
-      status: "RESOLVED"
-    }
-  ]);
   const [timeStr, setTimeStr] = useState("13:54");
 
   // Multi-request flight state registry
@@ -587,70 +533,7 @@ export default function App() {
               }
             }
           } else if (message.type === "CRITICAL_ALERT") {
-            if (message.alertType === "TIGER" && message.threatLocation) {
-              const affectedReqIds: string[] = [];
-              allRequestsRef.current.forEach((req) => {
-                if (req.status === "APPROVED" || req.status === "ACTIVE") {
-                  const activePolygon = getRequestGeometry(req);
-                  if (activePolygon && activePolygon.length > 0) {
-                    const isInside = isPointInPolygon(
-                      [message.threatLocation.lat, message.threatLocation.lng],
-                      activePolygon
-                    );
-                    if (isInside) {
-                      affectedReqIds.push(req.id);
-                    }
-                  }
-                }
-              });
-
-              if (affectedReqIds.length > 0) {
-                setActiveTigerRequestIds(affectedReqIds);
-                setActiveAlert(message.message || "נוהל נמר הופעל באזור שלך");
-                const now = new Date();
-                const time = now.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" });
-                setSystemAlerts((prev) => [
-                  {
-                    id: `alt-${Math.floor(1000 + Math.random() * 9000)}`,
-                    time,
-                    message: message.message || "נוהל נמר הופעל באזור שלך",
-                    type: "TIGER",
-                    status: "ACTIVE"
-                  },
-                  ...prev
-                ]);
-
-                // Notify HQ immediately that we received the instruction (pending execution)
-                affectedReqIds.forEach((reqId) => {
-                  const req = allRequestsRef.current.find(r => r.id === reqId);
-                  const current = flightStatesRef.current[reqId];
-                  const drones = current?.drones || [
-                    {
-                      id: reqId.replace("req", "flight"),
-                      droneModel: req?.droneModel || "EVO 4T"
-                    }
-                  ];
-                  drones.forEach((drone: any) => {
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        type: "TIGER_RESPONSE",
-                        status: "PENDING",
-                        operatorName: operatorNameRef.current,
-                        unit: operatorUnitRef.current,
-                        requestId: reqId,
-                        flightId: drone.id,
-                        reason: "",
-                        timestamp: now.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-                      }));
-                    }
-                  });
-                });
-              } else {
-                console.log("Ignored Tiger alert - threat is outside active polygon");
-              }
-            } else {
-              setActiveAlert(message.message);
-            }
+            setActiveAlert(message.message);
           }
         } catch (err) {
           console.error("Error parsing message", err);
@@ -1308,104 +1191,6 @@ export default function App() {
     setActiveTab("FORM");
   };
 
-  const handleTigerResponse = (status: "EXECUTED" | "CANNOT_EXECUTE") => {
-    if (activeTigerRequestIds.length === 0) {
-      setActiveAlert(null);
-      setTigerRefusalReason("");
-      return;
-    }
-
-    const timestamp = new Date().toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-
-    if (status === "EXECUTED") {
-      setFlightStates((prev) => {
-        const next = { ...prev };
-        activeTigerRequestIds.forEach((reqId) => {
-          const req = allRequests.find((r) => r.id === reqId);
-          const current = next[reqId];
-          if (req && current && current.drones) {
-            const updatedDrones = current.drones.map((drone: DroneState, idx: number) => {
-              const nextOffset = (drone.altitudeOffset || 0) + 100;
-              const angleWithOffset = (drone.angle || 0) + (idx * (2 * Math.PI / 3));
-              const baseAlt = req.minAlt + 12 + Math.floor(Math.sin(angleWithOffset) * 5) + (idx * 15);
-              const newAlt = baseAlt + nextOffset;
-
-              // Send TIGER_CONFIRMED message via WebSocket to update altitude in the HQ console
-              if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-                socketRef.current.send(
-                  JSON.stringify({
-                    type: "TIGER_CONFIRMED",
-                    requestId: reqId,
-                    flightId: drone.id,
-                    altitude: newAlt,
-                  })
-                );
-
-                // Send TIGER_RESPONSE with EXECUTED status
-                socketRef.current.send(
-                  JSON.stringify({
-                    type: "TIGER_RESPONSE",
-                    status: "EXECUTED",
-                    operatorName: operatorName,
-                    unit: operatorUnit,
-                    requestId: reqId,
-                    flightId: drone.id,
-                    reason: "",
-                    timestamp
-                  })
-                );
-              }
-
-              return {
-                ...drone,
-                altitudeOffset: nextOffset,
-                altitude: newAlt,
-              };
-            });
-
-            next[reqId] = {
-              ...current,
-              drones: updatedDrones,
-            };
-          }
-        });
-        return next;
-      });
-    } else {
-      // status === "CANNOT_EXECUTE"
-      activeTigerRequestIds.forEach((reqId) => {
-        const current = flightStates[reqId];
-        const req = allRequests.find((r) => r.id === reqId);
-        const drones = current?.drones || [
-          {
-            id: reqId.replace("req", "flight"),
-            droneModel: req?.droneModel || "EVO 4T"
-          }
-        ];
-        drones.forEach((drone: DroneState) => {
-          if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-            socketRef.current.send(
-              JSON.stringify({
-                type: "TIGER_RESPONSE",
-                status: "CANNOT_EXECUTE",
-                operatorName: operatorName,
-                unit: operatorUnit,
-                requestId: reqId,
-                flightId: drone.id,
-                reason: tigerRefusalReason || "לא ניתן לביצוע",
-                timestamp
-              })
-            );
-          }
-        });
-      });
-    }
-
-    setActiveTigerRequestIds([]);
-    setActiveAlert(null);
-    setTigerRefusalReason("");
-  };
-
   return (
     <div style={styles.deviceContainer}>
       <style>{inlineStyles}</style>
@@ -1636,51 +1421,6 @@ export default function App() {
                   >
                     ⬆ סנכרן עם המפקדה ({myDrones.length} רחפנים)
                   </button>
-                )}
-              </div>
-            </div>
-          ) : activeTab === "ALERTS" ? (
-            /* Alerts Screen */
-            <div style={styles.formContainer}>
-              <div style={{ padding: "0 2px" }}>
-                <h3 style={{ ...styles.formTitle, marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
-                  <Bell size={16} color="#e74c3c" /> התראות נוהל נמר
-                </h3>
-
-                {systemAlerts.length === 0 ? (
-                  <div style={{ textAlign: "center", padding: "40px 20px", color: "#7f8c8d" }}>
-                    <Bell size={32} color="#2a2a35" style={{ marginBottom: "10px" }} />
-                    <p style={{ fontSize: "12px", margin: 0 }}>אין התראות נוהל נמר קיימות בגזרה.</p>
-                  </div>
-                ) : (
-                  systemAlerts.map((alt) => {
-                    const isTigerActive = alt.status === "ACTIVE";
-                    const statusColor = isTigerActive ? "#e74c3c" : "#2ecc71";
-                    const statusLabel = isTigerActive ? "נוהל נמר פעיל" : "אירוע הסתיים";
-                    return (
-                      <div
-                        key={alt.id}
-                        style={{
-                          backgroundColor: isTigerActive ? "rgba(231,76,60,0.12)" : "rgba(46,204,113,0.1)",
-                          border: `1px solid ${isTigerActive ? "rgba(231,76,60,0.4)" : "rgba(46,204,113,0.3)"}`,
-                          borderRadius: "8px",
-                          padding: "10px 12px",
-                          marginBottom: "10px",
-                          borderRight: `3px solid ${statusColor}`
-                        }}
-                      >
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "4px" }}>
-                          <span style={{ fontSize: "10px", fontWeight: "bold", color: statusColor, display: "flex", alignItems: "center", gap: "4px" }}>
-                            {isTigerActive ? <AlertOctagon size={10} /> : <CheckCircle size={10} />} {statusLabel}
-                          </span>
-                          <span style={{ fontSize: "9px", color: "#7f8c8d" }}>{alt.time}</span>
-                        </div>
-                        <p style={{ margin: 0, fontSize: "11px", color: "#ecf0f1", lineHeight: "1.4" }}>
-                          {alt.message}
-                        </p>
-                      </div>
-                    );
-                  })
                 )}
               </div>
             </div>
@@ -2435,25 +2175,8 @@ export default function App() {
             <span style={styles.navText}>בקשות טיסה</span>
           </button>
 
-          <button 
-            onClick={() => setActiveTab("ALERTS")} 
-            style={{
-              ...styles.navItem,
-              color: activeTab === "ALERTS" ? "#e74c3c" : "#7f8c8d",
-              borderTop: activeTab === "ALERTS" ? "2px solid #e74c3c" : "2px solid transparent"
-            }}
-          >
-            <span style={styles.navIcon}>
-              <span style={{ position: "relative", display: "inline-block" }}>
-                <Bell size={18} />
-                <span style={{ position: "absolute", top: "-4px", left: "-4px", backgroundColor: "#e74c3c", borderRadius: "50%", width: "8px", height: "8px", border: "1.5px solid #16161d" }} />
-              </span>
-            </span>
-            <span style={styles.navText}>התראות</span>
-          </button>
-
-          <button 
-            onClick={() => setActiveTab("DRONES")} 
+          <button
+            onClick={() => setActiveTab("DRONES")}
             style={{
               ...styles.navItem,
               color: activeTab === "DRONES" ? "#3498db" : "#7f8c8d",
@@ -2479,13 +2202,12 @@ export default function App() {
 
         {/* Dynamic Alert Fullscreen Overlay (Positioned absolutely inside the phoneFrame) */}
         {activeAlert && (
-          <div 
-            className={(activeAlert.includes("נמר") || activeTigerRequestIds.length > 0) ? "tiger-alert-box" : ""}
+          <div
             style={{
               ...styles.alertOverlay,
               backgroundColor: "rgba(10, 10, 14, 0.99)",
-              border: (activeAlert.includes("נמר") || activeTigerRequestIds.length > 0) ? "4px solid #f1c40f" : "3px solid #e74c3c",
-              boxShadow: (activeAlert.includes("נמר") || activeTigerRequestIds.length > 0) ? "0 0 35px rgba(241, 196, 15, 0.6)" : "0 0 30px rgba(230, 76, 60, 0.6)",
+              border: "3px solid #e74c3c",
+              boxShadow: "0 0 30px rgba(230, 76, 60, 0.6)",
               borderRadius: "28px",
               display: "flex",
               flexDirection: "column",
@@ -2507,159 +2229,39 @@ export default function App() {
               }}>
                 <AlertOctagon size={50} color="#e74c3c" />
               </div>
-              
-              {(activeAlert.includes("נמר") || activeTigerRequestIds.length > 0) ? (
-                <>
-                  <h2 style={{
-                    fontSize: "24px",
-                    fontWeight: 800,
-                    color: "#e74c3c",
-                    margin: "0 0 15px 0",
-                    textShadow: "0 2px 4px rgba(0,0,0,0.5)",
-                    fontFamily: "var(--font-family)"
-                  }}>נוהל נמר הופעל באזור שלך!</h2>
-                  
-                  {/* Neon Operational Instruction Badge */}
-                  <div style={{
-                    backgroundColor: "rgba(241, 196, 15, 0.15)",
-                    border: "2px solid #f1c40f",
-                    borderRadius: "10px",
-                    padding: "15px",
-                    width: "100%",
-                    boxSizing: "border-box",
-                    marginBottom: "20px",
-                    boxShadow: "0 0 15px rgba(241, 196, 15, 0.25)"
-                  }}>
-                    <span style={{
-                      fontSize: "11px",
-                      fontWeight: "bold",
-                      color: "#f1c40f",
-                      display: "block",
-                      marginBottom: "6px",
-                      textTransform: "uppercase",
-                      letterSpacing: "1px"
-                    }}>הנחיה מבצעית חיונית</span>
-                    <span 
-                      className="tiger-instruction-text"
-                      style={{
-                        fontSize: "18px",
-                        fontWeight: 900,
-                        color: "#fff",
-                        lineHeight: "1.4",
-                        display: "block",
-                      }}
-                    >העלה את הרחפן ב-100 מטר</span>
-                  </div>
 
-                  <p style={{
-                    fontSize: "12px",
-                    color: "#bdc3c7",
-                    lineHeight: "1.5",
-                    margin: "0 0 20px 0",
-                    padding: "0 10px"
-                  }}>{activeAlert}</p>
-                </>
-              ) : (
-                <>
-                  <h2 style={{
-                    fontSize: "24px",
-                    fontWeight: 800,
-                    color: "#e67e22",
-                    margin: "0 0 15px 0"
-                  }}>התרעת חירום!</h2>
-                  <p style={{
-                    fontSize: "14px",
-                    color: "#ecf0f1",
-                    lineHeight: "1.5",
-                    margin: "0 0 25px 0"
-                  }}>{activeAlert}</p>
-                </>
-              )}
+              <h2 style={{
+                fontSize: "24px",
+                fontWeight: 800,
+                color: "#e67e22",
+                margin: "0 0 15px 0"
+              }}>התרעת חירום!</h2>
+              <p style={{
+                fontSize: "14px",
+                color: "#ecf0f1",
+                lineHeight: "1.5",
+                margin: "0 0 25px 0"
+              }}>{activeAlert}</p>
             </div>
-            
+
             <div style={{ width: "100%" }}>
-              {(activeAlert.includes("נמר") || activeTigerRequestIds.length > 0) ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: "10px", width: "100%" }}>
-                  <button
-                    className="tiger-btn-confirm"
-                    style={{
-                      width: "100%",
-                      backgroundColor: "#2ecc71",
-                      color: "#fff",
-                      border: "none",
-                      padding: "14px 20px",
-                      borderRadius: "12px",
-                      fontSize: "16px",
-                      fontWeight: "bold",
-                      cursor: "pointer",
-                      boxShadow: "0 4px 15px rgba(46, 204, 113, 0.4)",
-                      transition: "all 0.2s"
-                    }}
-                    onClick={() => handleTigerResponse("EXECUTED")}
-                  >
-                    בוצע
-                  </button>
-
-                  <div style={{ display: "flex", flexDirection: "column", gap: "6px", width: "100%", marginTop: "5px" }}>
-                    <label style={{ fontSize: "11px", color: "#a0a0a0", textAlign: "right" }}>סיבת אי-ביצוע:</label>
-                    <input 
-                      type="text" 
-                      placeholder="לדוגמה: בנתק תקשורת מהרחפן" 
-                      value={tigerRefusalReason}
-                      onChange={(e) => setTigerRefusalReason(e.target.value)}
-                      style={{
-                        backgroundColor: "#16161a",
-                        border: "1px solid #3d424f",
-                        borderRadius: "8px",
-                        color: "#fff",
-                        padding: "8px 12px",
-                        fontSize: "12px",
-                        outline: "none",
-                        textAlign: "right",
-                        direction: "rtl"
-                      }}
-                    />
-                  </div>
-
-                  <button
-                    style={{
-                      width: "100%",
-                      backgroundColor: "#e74c3c",
-                      color: "#fff",
-                      border: "none",
-                      padding: "12px 20px",
-                      borderRadius: "12px",
-                      fontSize: "14px",
-                      fontWeight: "bold",
-                      cursor: "pointer",
-                      boxShadow: "0 4px 15px rgba(231, 76, 60, 0.3)",
-                      transition: "all 0.2s",
-                      marginTop: "5px"
-                    }}
-                    onClick={() => handleTigerResponse("CANNOT_EXECUTE")}
-                  >
-                    לא ניתן לביצוע
-                  </button>
-                </div>
-              ) : (
-                <button
-                  style={{
-                    width: "100%",
-                    backgroundColor: "#fff",
-                    color: "#111",
-                    border: "none",
-                    padding: "12px 20px",
-                    borderRadius: "10px",
-                    fontSize: "14px",
-                    fontWeight: "bold",
-                    cursor: "pointer",
-                    boxShadow: "0 4px 10px rgba(0,0,0,0.3)"
-                  }}
-                  onClick={() => setActiveAlert(null)}
-                >
-                  אישור קבלת התרעה
-                </button>
-              )}
+              <button
+                style={{
+                  width: "100%",
+                  backgroundColor: "#fff",
+                  color: "#111",
+                  border: "none",
+                  padding: "12px 20px",
+                  borderRadius: "10px",
+                  fontSize: "14px",
+                  fontWeight: "bold",
+                  cursor: "pointer",
+                  boxShadow: "0 4px 10px rgba(0,0,0,0.3)"
+                }}
+                onClick={() => setActiveAlert(null)}
+              >
+                אישור קבלת התרעה
+              </button>
             </div>
           </div>
         )}

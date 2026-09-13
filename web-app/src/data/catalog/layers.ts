@@ -93,6 +93,7 @@ export const initialMainFolders: MainFolder[] = [
             ],
           },
           { id: 'mv-khruqq',          name: 'רוק"ק',                 color: '#60a5fa', isEditable: true,  visibility: 'tactical-hq',     sharing: 'pool',    isVisible: false, isPermanent: P, isInOrganizer: IO },
+          { id: 'mv-khruqq-merhav',   name: 'ארגון המרחב',           color: '#22c55e', isEditable: true,  visibility: 'tactical-hq',     sharing: 'unit',    isVisible: true,  isPermanent: P, isInOrganizer: IO },
           { id: 'mv-hagana',          name: 'הנדסה',                 color: '#93c5fd', isEditable: true,  visibility: 'tactical-hq',     sharing: 'unit',    isVisible: true,  isPermanent: P, isInOrganizer: IO },
           { id: 'mv-oref',            name: 'עורף',                  color: '#bfdbfe', isEditable: false, visibility: 'hq-only',         sharing: 'unit',    isVisible: true,  isPermanent: P, isInOrganizer: IO },
           { id: 'mv-bkama',           name: 'בקדמ"ה',                color: '#dbeafe', isEditable: true,  visibility: 'hq-only',         sharing: 'unit',    isVisible: false, isPermanent: P, isInOrganizer: IO },

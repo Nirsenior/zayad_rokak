@@ -3,7 +3,7 @@ import { MapContainer, TileLayer, Marker, Polygon, Circle, Polyline, Tooltip, us
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "leaflet.heat";
-import { AlertOctagon, MapPin, Plane, Radio, X, AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Activity, Wifi, Clock, Gauge, Cpu, Flame, Route, Layers, Crosshair } from "lucide-react";
+import { AlertOctagon, MapPin, Plane, Radio, X, AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Activity, Wifi, Clock, Gauge, Cpu, Flame, Route, Layers, Crosshair, Hexagon, Square, Circle as CircleIcon, Spline, PenTool, Ruler } from "lucide-react";
 import { GanttChartPanel } from "./GanttChartPanel";
 import {
   ANTENNA_PRESETS,
@@ -15,6 +15,29 @@ import {
   type RFAntenna,
 } from "../utils/rfCoverage";
 import {
+  SPACE_AREA_MIN_SCORE,
+  SPACE_AREA_MAX_SCORE,
+  SPACE_AREA_COLOR_PALETTE,
+  SPACE_AREA_SHAPE_LABELS,
+  DEFAULT_SPACE_AREA_COLOR,
+  scoreToColor as spaceAreaScoreToColor,
+  getSpaceAreaCenter,
+  areaContainsPoint,
+  areasAtPoint,
+  formatCreationDetails,
+  sortByStackOrder,
+  nextStackIndex,
+  isVertexEditableShape,
+  rectangleCorners,
+  distanceMeters,
+  pathLengthMeters,
+  polygonAreaSqMeters,
+  formatDistance,
+  formatArea,
+  type SpaceArea,
+  type SpaceAreaShape,
+} from "../utils/spaceOrganization";
+import {
   MOCK_SENSOR_DETECTIONS,
   MOCK_IDENTIFICATION_EVENTS,
   MOCK_DATA_RANGE_START_MS,
@@ -25,6 +48,7 @@ import {
   type EnrichedDetection,
 } from "../data/mockEnemyDetections";
 import { useAppSession } from "../context/AppSessionContext";
+import { getPersona } from "../utils/roleUnitMenu";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 
 // datetime-local inputs use "YYYY-MM-DDTHH:mm" in the browser's local timezone.
@@ -45,19 +69,6 @@ const enemyTrackColor = (status: IffStatus): string => {
     case "CONFLICTING": return "#a855f7";
     default: return "#94a3b8";
   }
-};
-
-const isPointInPolygon = (point: [number, number], polygon: [number, number][]) => {
-  const x = point[0], y = point[1];
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const xi = polygon[i][0], yi = polygon[i][1];
-    const xj = polygon[j][0], yj = polygon[j][1];
-    const intersect = ((yi > y) !== (yj > y))
-        && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
-    if (intersect) inside = !inside;
-  }
-  return inside;
 };
 
 interface FlightRequest {
@@ -174,6 +185,8 @@ export interface Track {
   lastUpdateTimestamp?: string;
   altHistory?: { timestamp: string; alt: number }[];
   detectingSensors?: DetectingSensor[];
+  /** קצין הרוק"ק flagged this entity for follow-up — independent of its IFF classification */
+  flagged?: boolean;
 }
 
 interface Zone {
@@ -371,6 +384,12 @@ interface TacticalMapProps {
   antennas?: RFAntenna[];
   onUpsertAntenna?: (antenna: RFAntenna) => void;
   onRemoveAntenna?: (id: string) => void;
+  spaceAreas?: SpaceArea[];
+  onUpsertSpaceArea?: (area: SpaceArea) => void;
+  onRemoveSpaceArea?: (id: string) => void;
+  showSpaceOrgPanel?: boolean;
+  showPenetrationRoutesPanel?: boolean;
+  showRfPlanningPanel?: boolean;
 }
 
 // Custom DivIcon creator for Drones/Tracks
@@ -414,18 +433,25 @@ const createTrackIcon = (track: any, color: string) => {
     <path d="M12 -1 L16 -5 L20 -1" stroke="${color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none" />
   `;
 
+  // A flag is independent of IFF classification, so it's drawn as its own square
+  // outside the classification frame rather than replacing it.
+  const flagSvg = track.flagged
+    ? `<rect x="-3" y="-3" width="38" height="38" stroke="#ef4444" stroke-width="2.5" fill="none" />`
+    : "";
+
   return L.divIcon({
     className: "tactical-track-marker",
     html: `
       <div style="position: relative; display: flex; flex-direction: column; align-items: center;">
         <div class="${frameClass}" style="
-          width: 32px; 
-          height: 32px; 
+          width: 32px;
+          height: 32px;
           position: relative;
         ">
           <!-- Non-rotating frame -->
-          <svg width="32" height="32" viewBox="0 0 32 32" style="position: absolute; top:0; left:0;">
+          <svg width="32" height="32" viewBox="0 0 32 32" style="position: absolute; top:0; left:0; overflow: visible;">
             ${frameSvg}
+            ${flagSvg}
           </svg>
           <!-- Rotating heading indicator & drone -->
           <div style="
@@ -710,6 +736,42 @@ const createEditHandleIcon = (num: number, color: string) => {
   });
 };
 
+// ארגון המרחב drawing palette — the standard map-tool set (polygon / rectangle / circle /
+// line / point / freehand) plus a transient measurement tool.
+const SPACE_TOOLS: { tool: SpaceAreaShape | "MEASURE"; label: string; Icon: typeof Hexagon }[] = [
+  { tool: "POLYGON", label: "פוליגון", Icon: Hexagon },
+  { tool: "RECTANGLE", label: "מלבן", Icon: Square },
+  { tool: "CIRCLE", label: "עיגול", Icon: CircleIcon },
+  { tool: "LINE", label: "קו", Icon: Spline },
+  { tool: "MARKER", label: "נקודה", Icon: MapPin },
+  { tool: "FREEHAND", label: "יד חופשית", Icon: PenTool },
+  { tool: "MEASURE", label: "מדידה", Icon: Ruler },
+];
+
+const SPACE_TOOL_HINTS: Record<SpaceAreaShape, string> = {
+  POLYGON: "לחץ על המפה להוספת נקודות (נדרשות לפחות 3)",
+  RECTANGLE: "לחץ פינה אחת ואז את הפינה הנגדית",
+  CIRCLE: "לחץ על המרכז ואז לחץ שוב לקביעת הרדיוס",
+  LINE: "לחץ על המפה להוספת נקודות למסלול",
+  MARKER: "לחץ על המפה למיקום הנקודה",
+  FREEHAND: "לחץ וגרור על המפה לסרטוט חופשי",
+};
+
+const createSpaceAreaMarkerIcon = (color: string, isSelected: boolean) => {
+  return L.divIcon({
+    className: "space-area-marker",
+    html: `
+      <svg width="22" height="28" viewBox="0 0 22 28" xmlns="http://www.w3.org/2000/svg">
+        <path d="M11 27C11 27 20 16.5 20 10.5C20 5.25 15.97 1 11 1C6.03 1 2 5.25 2 10.5C2 16.5 11 27 11 27Z"
+          fill="${color}" fill-opacity="0.9" stroke="#fff" stroke-width="${isSelected ? 2.5 : 1.5}" />
+        <circle cx="11" cy="10.5" r="3.2" fill="#fff" />
+      </svg>
+    `,
+    iconSize: [22, 28],
+    iconAnchor: [11, 27],
+  });
+};
+
 // Inner component: listens to flyToTarget and calls map.flyTo
 interface MapFlyControllerProps {
   target: [number, number, number?] | null;
@@ -753,6 +815,75 @@ const MapClickHandler: React.FC<MapClickHandlerProps> = ({ enabled, onMapClick }
       }
     },
   });
+  return null;
+};
+
+// Feeds the cursor position while a drawing tool is armed, so rectangle/circle/line
+// can render a live rubber-band preview before the shape is committed.
+const MapMouseMoveHandler: React.FC<{ enabled: boolean; onMove: (lat: number, lng: number) => void }> = ({
+  enabled,
+  onMove,
+}) => {
+  useMapEvents({
+    mousemove: (e) => {
+      if (enabled) onMove(e.latlng.lat, e.latlng.lng);
+    },
+  });
+  return null;
+};
+
+// Freehand drawing needs raw drag events, so it takes over map panning while armed and
+// samples the pointer path (thinned to ~15m steps to keep the point list sane).
+const FREEHAND_MIN_STEP_METERS = 15;
+const FreehandDrawHandler: React.FC<{
+  enabled: boolean;
+  onProgress: (points: [number, number][]) => void;
+  onComplete: (points: [number, number][]) => void;
+}> = ({ enabled, onProgress, onComplete }) => {
+  const map = useMap();
+  const isDrawingRef = useRef(false);
+  const pointsRef = useRef<[number, number][]>([]);
+  // Kept in refs so a re-render mid-drag doesn't tear down and re-arm the listeners,
+  // which would toggle map dragging in the middle of a stroke.
+  const onProgressRef = useRef(onProgress);
+  const onCompleteRef = useRef(onComplete);
+  onProgressRef.current = onProgress;
+  onCompleteRef.current = onComplete;
+
+  useEffect(() => {
+    if (!enabled) return;
+    map.dragging.disable();
+
+    const handleDown = (e: L.LeafletMouseEvent) => {
+      isDrawingRef.current = true;
+      pointsRef.current = [[e.latlng.lat, e.latlng.lng]];
+      onProgressRef.current([...pointsRef.current]);
+    };
+    const handleMove = (e: L.LeafletMouseEvent) => {
+      if (!isDrawingRef.current) return;
+      const next: [number, number] = [e.latlng.lat, e.latlng.lng];
+      const last = pointsRef.current[pointsRef.current.length - 1];
+      if (last && distanceMeters(last, next) < FREEHAND_MIN_STEP_METERS) return;
+      pointsRef.current.push(next);
+      onProgressRef.current([...pointsRef.current]);
+    };
+    const handleUp = () => {
+      if (!isDrawingRef.current) return;
+      isDrawingRef.current = false;
+      onCompleteRef.current([...pointsRef.current]);
+    };
+
+    map.on("mousedown", handleDown);
+    map.on("mousemove", handleMove);
+    map.on("mouseup", handleUp);
+    return () => {
+      map.dragging.enable();
+      map.off("mousedown", handleDown);
+      map.off("mousemove", handleMove);
+      map.off("mouseup", handleUp);
+    };
+  }, [enabled, map]);
+
   return null;
 };
 
@@ -878,8 +1009,7 @@ const EnemyTimelineScrubber: React.FC<EnemyTimelineScrubberProps> = ({ boundsSta
 };
 
 export const TacticalMap: React.FC<TacticalMapProps> = ({
-  onTriggerAlert, 
-  liveTracks = [], 
+  liveTracks = [],
   approvedCorridors = [],
   flights = [],
   requests = [],
@@ -892,7 +1022,13 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
   onUpdateRequestCoordinates,
   antennas = [],
   onUpsertAntenna,
-  onRemoveAntenna
+  onRemoveAntenna,
+  spaceAreas = [],
+  onUpsertSpaceArea,
+  onRemoveSpaceArea,
+  showSpaceOrgPanel = false,
+  showPenetrationRoutesPanel = false,
+  showRfPlanningPanel = false
 }) => {
   const handleCloseIncident = (trackId: string) => {
     setTracks((prev) => prev.filter((t) => t.id !== trackId));
@@ -1142,6 +1278,55 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
     }
   ]);
 
+  // Fictitious sensor-detection generator — keeps "אירועים פתוחים" alive instead of a
+  // static list: periodically spawns a new unidentified/hostile track at a random
+  // location, which expires on its own after a while (in addition to the existing
+  // manual "X" close). Friendly "כלים באוויר" tracks are untouched by this.
+  useEffect(() => {
+    const timeouts: ReturnType<typeof setTimeout>[] = [];
+    let counter = 0;
+
+    const DETECTION_TEMPLATES: Array<{ type: string; label: string; iffStatus: Track["iffStatus"] }> = [
+      { type: "רחפן לא מזוהה (Quadcopter)", label: "זיהוי", iffStatus: "UNIDENTIFIED" },
+      { type: "רחפן חשוד (FPV/Loitering)", label: "חדירה", iffStatus: "RED_SUSPICIOUS" },
+      { type: "רחפן עוין (Fixed-Wing)", label: "איתור", iffStatus: "RED_CERTAIN" },
+    ];
+
+    const spawnDetection = () => {
+      counter += 1;
+      const template = DETECTION_TEMPLATES[Math.floor(Math.random() * DETECTION_TEMPLATES.length)];
+      const id = `${template.label} ${counter} - זיהוי סנסור`;
+      const nowLabel = new Date().toLocaleTimeString("he-IL", { hour12: false });
+      const newTrack: Track = {
+        id,
+        type: template.type,
+        iffStatus: template.iffStatus,
+        coordinates: {
+          lat: 33.20 + Math.random() * 0.15,
+          lng: 35.50 + Math.random() * 0.12,
+          altMsl: 60 + Math.round(Math.random() * 200),
+        },
+        speedKts: 10 + Math.round(Math.random() * 20),
+        heading: Math.round(Math.random() * 360),
+        startTime: nowLabel,
+        lastUpdateSeconds: 0,
+        lastUpdateTimestamp: nowLabel,
+      };
+      setTracks((prev) => [...prev, newTrack]);
+
+      // Auto-expire this simulated detection after 1-2 minutes, unless already closed manually
+      timeouts.push(setTimeout(() => {
+        setTracks((prev) => prev.filter((t) => t.id !== id));
+      }, 60000 + Math.random() * 60000));
+
+      timeouts.push(setTimeout(spawnDetection, 15000 + Math.random() * 15000));
+    };
+
+    timeouts.push(setTimeout(spawnDetection, 8000));
+
+    return () => timeouts.forEach(clearTimeout);
+  }, []);
+
   // Sensors & Radars
   const [sensors] = useState<TacticalSensor[]>([
     {
@@ -1245,51 +1430,6 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
     selectedTrackRef.current = selectedTrack;
   }, [selectedTrack]);
 
-  const [tigerTrackId, setTigerTrackId] = useState<string | null>(null);
-  const [tigerTimer, setTigerTimer] = useState<number>(0);
-  const [tigerPanelOpen, setTigerPanelOpen] = useState<boolean>(true);
-
-  useEffect(() => {
-    if (tigerTrackId) {
-      setTigerPanelOpen(true);
-    }
-  }, [tigerTrackId]);
-
-  // Commented out to prevent the Tiger Procedure control panel from closing automatically
-  // when a flight updates its status to CONFIRMED. This allows the target room to manually review
-  // and select "סווג ככחול" or "הסלם לפטיש אוויר".
-  /*
-  useEffect(() => {
-    flights.forEach((flight) => {
-      if (flight.tigerStatus === "CONFIRMED") {
-        const reqId = flight.id.replace("flight", "req");
-        const corridor = approvedCorridors.find((c) => c.id === `approved-${reqId}`);
-        if (corridor && corridor.geometry) {
-          const threatInside = tracks.find((t) => {
-            const isThreat = t.iffStatus === "UNIDENTIFIED" || t.iffStatus.startsWith("RED");
-            if (!isThreat) return false;
-            return isPointInPolygon([t.coordinates.lat, t.coordinates.lng], corridor.geometry);
-          });
-
-          if (threatInside) {
-            setTracks((prev) =>
-              prev.map((t) =>
-                t.id === threatInside.id ? { ...t, iffStatus: "BLUE_CERTAIN" } : t
-              )
-            );
-            if (selectedTrack?.id === threatInside.id) {
-              setSelectedTrack((prev) => prev ? { ...prev, iffStatus: "BLUE_CERTAIN" } : null);
-            }
-            if (tigerTrackId === threatInside.id) {
-              setTigerTrackId(null);
-              setTigerTimer(0);
-            }
-          }
-        }
-      }
-    });
-  }, [flights, approvedCorridors, tracks, tigerTrackId]);
-  */
 
   // Fly-to target: [lat, lng, zoom?]
   const [flyToTarget, setFlyToTarget] = useState<[number, number, number?] | null>(null);
@@ -1329,6 +1469,19 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
     polygonName: string;
     status: FlightRequest["status"];
   } | null>(null);
+
+  // Right-click tagging menu state — קצין הרוק"ק classifying a drone/aircraft track
+  const [trackContextMenu, setTrackContextMenu] = useState<{
+    x: number;
+    y: number;
+    trackId: string;
+  } | null>(null);
+
+  const applyTrackTag = (trackId: string, patch: Partial<Track>) => {
+    setTracks((prev) => prev.map((t) => (t.id === trackId ? { ...t, ...patch } : t)));
+    setSelectedTrack((prev) => (prev?.id === trackId ? { ...prev, ...patch } : prev));
+    setTrackContextMenu(null);
+  };
 
   // Local Toast notification state
   const [toast, setToast] = useState<{
@@ -1384,12 +1537,140 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
   const [showGroundForces, setShowGroundForces] = useState(true);
   const [showAntennas, setShowAntennas] = useState(true);
   const [showEnemyHeatmap, setShowEnemyHeatmap] = useState(true);
+  const [showSpaceAreas, setShowSpaceAreas] = useState(true);
 
   // RF antenna placement + editing state
   const [selectedAntenna, setSelectedAntenna] = useState<RFAntenna | null>(null);
   const [antennaEditDraft, setAntennaEditDraft] = useState<RFAntenna | null>(null);
   const [pendingAntennaPresetId, setPendingAntennaPresetId] = useState<string>(ANTENNA_PRESETS[0].id);
   const [antennaPlacementPresetId, setAntennaPlacementPresetId] = useState<string | null>(null);
+
+  // ארגון המרחב — drawing tools, draft object being drawn, and selection/editing state
+  const [activeTool, setActiveTool] = useState<SpaceAreaShape | "MEASURE" | null>(null);
+  const [toolPaletteOpen, setToolPaletteOpen] = useState(false);
+  const [draftPoints, setDraftPoints] = useState<[number, number][]>([]);
+  const [draftComplete, setDraftComplete] = useState(false);
+  const [cursorPoint, setCursorPoint] = useState<[number, number] | null>(null);
+  const [measurePoints, setMeasurePoints] = useState<[number, number][]>([]);
+  const [newSpaceAreaName, setNewSpaceAreaName] = useState("");
+  const [newSpaceAreaScore, setNewSpaceAreaScore] = useState<number | null>(5);
+  const [newSpaceAreaColor, setNewSpaceAreaColor] = useState(DEFAULT_SPACE_AREA_COLOR);
+  const [selectedSpaceArea, setSelectedSpaceArea] = useState<SpaceArea | null>(null);
+  const [spaceAreaEditDraft, setSpaceAreaEditDraft] = useState<SpaceArea | null>(null);
+
+  // ארגון המרחב — reshaping (editing an existing object's own points) state
+  const [isEditingSpaceAreaShape, setIsEditingSpaceAreaShape] = useState(false);
+  const [spaceAreaShapeEditTarget, setSpaceAreaShapeEditTarget] = useState<SpaceArea | null>(null);
+  const [currentSpaceAreaEditPoints, setCurrentSpaceAreaEditPoints] = useState<[number, number][]>([]);
+
+  // Leaflet paints paths in creation order, so restacking has to be applied imperatively
+  // on the layer instances rather than by reordering the React children.
+  const spaceAreaLayersRef = useRef<Record<string, L.Path>>({});
+  const orderedSpaceAreas = sortByStackOrder(spaceAreas);
+  const stackSignature = orderedSpaceAreas.map((a) => a.id).join("|");
+  useEffect(() => {
+    orderedSpaceAreas.forEach((area) => {
+      spaceAreaLayersRef.current[area.id]?.bringToFront();
+    });
+  }, [stackSignature]);
+
+  // Cycling through objects stacked on the same ground: repeated clicks at the same spot
+  // step down through the stack instead of always re-selecting the front-most one.
+  const lastStackClickRef = useRef<{ lat: number; lng: number; index: number } | null>(null);
+
+  const isDrawingSpaceArea = activeTool !== null && activeTool !== "MEASURE";
+  // Rectangle/circle are two-click shapes; the rest keep collecting points until the officer saves.
+  const draftShapePoints: [number, number][] =
+    activeTool === "RECTANGLE" && draftPoints.length === 1 && cursorPoint
+      ? rectangleCorners(draftPoints[0], cursorPoint)
+      : activeTool === "RECTANGLE" && draftPoints.length === 2
+        ? rectangleCorners(draftPoints[0], draftPoints[1])
+        : draftPoints;
+  const draftRadiusMeters =
+    activeTool === "CIRCLE" && draftPoints.length >= 1
+      ? distanceMeters(draftPoints[0], draftPoints[1] ?? cursorPoint ?? draftPoints[0])
+      : 0;
+
+  const resetDraft = () => {
+    setDraftPoints([]);
+    setDraftComplete(false);
+    setCursorPoint(null);
+  };
+
+  const cancelDrawing = () => {
+    setActiveTool(null);
+    resetDraft();
+    setNewSpaceAreaName("");
+    setNewSpaceAreaScore(5);
+    setNewSpaceAreaColor(DEFAULT_SPACE_AREA_COLOR);
+  };
+
+  const minimumPointsFor = (shape: SpaceAreaShape) =>
+    shape === "MARKER" ? 1 : shape === "CIRCLE" ? 2 : shape === "LINE" ? 2 : 3;
+
+  const canSaveDraft =
+    activeTool !== null &&
+    activeTool !== "MEASURE" &&
+    (activeTool === "CIRCLE"
+      ? draftPoints.length >= 2
+      : draftShapePoints.length >= minimumPointsFor(activeTool));
+
+  const saveDraft = () => {
+    if (!canSaveDraft) return;
+    const area: SpaceArea = {
+      id: `space-area-${Date.now()}`,
+      name: newSpaceAreaName.trim() || SPACE_AREA_SHAPE_LABELS[activeTool],
+      score: newSpaceAreaScore,
+      color: newSpaceAreaColor,
+      shape: activeTool,
+      points: activeTool === "CIRCLE" ? [draftPoints[0]] : draftShapePoints,
+      ...(activeTool === "CIRCLE" ? { radiusMeters: draftRadiusMeters } : {}),
+      zIndex: nextStackIndex(spaceAreas),
+      createdAt: new Date().toISOString(),
+      createdBy: getPersona(session.userId)?.name,
+    };
+    onUpsertSpaceArea?.(area);
+    cancelDrawing();
+    setToolPaletteOpen(false);
+  };
+
+  // PowerPoint-style restacking: swap stack positions with the neighbour in that direction.
+  const moveSpaceAreaInStack = (area: SpaceArea, direction: "FRONT" | "BACK") => {
+    const ordered = sortByStackOrder(spaceAreas);
+    const idx = ordered.findIndex((a) => a.id === area.id);
+    const neighbour = direction === "FRONT" ? ordered[idx + 1] : ordered[idx - 1];
+    if (!neighbour) return;
+    const areaZ = area.zIndex ?? idx;
+    const neighbourZ = neighbour.zIndex ?? (direction === "FRONT" ? idx + 1 : idx - 1);
+    onUpsertSpaceArea?.({ ...area, zIndex: neighbourZ });
+    onUpsertSpaceArea?.({ ...neighbour, zIndex: areaZ });
+    if (selectedSpaceArea?.id === area.id) {
+      setSelectedSpaceArea({ ...area, zIndex: neighbourZ });
+      setSpaceAreaEditDraft((prev) => (prev?.id === area.id ? { ...prev, zIndex: neighbourZ } : prev));
+    }
+  };
+
+  const renderSpaceAreaColorSwatches = (value: string, onChange: (color: string) => void) => (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
+      {SPACE_AREA_COLOR_PALETTE.map((c) => (
+        <button
+          key={c}
+          onClick={() => onChange(c)}
+          title={c}
+          style={{
+            width: "20px",
+            height: "20px",
+            borderRadius: "50%",
+            backgroundColor: c,
+            border: value === c ? "2px solid #fff" : "1px solid rgba(255,255,255,0.3)",
+            boxShadow: value === c ? "0 0 0 2px rgba(255,255,255,0.4)" : "none",
+            cursor: "pointer",
+            padding: 0,
+          }}
+        />
+      ))}
+    </div>
+  );
 
   // Enemy activity heatmap — filters, time range, and display mode
   const [enemyDateRangeMode, setEnemyDateRangeMode] = useState<'24h' | '7d' | '30d' | 'custom'>('24h');
@@ -1416,8 +1697,6 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
 
   // Floating menu toggle state
   const [layersMenuOpen, setLayersMenuOpen] = useState(false);
-  const [antennaWidgetOpen, setAntennaWidgetOpen] = useState(false);
-  const [enemyWidgetOpen, setEnemyWidgetOpen] = useState(false);
 
   // Admin panel state
   const [adminMenuOpen, setAdminMenuOpen] = useState(false);
@@ -1507,13 +1786,6 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
   // Simulate real-time target movement & telemetry updates
   useEffect(() => {
     const interval = setInterval(() => {
-      setTigerTimer((prev) => {
-        if (prev > 0) {
-          return prev - 1;
-        }
-        return 0;
-      });
-
       const nowTimeStr = new Date().toLocaleTimeString("he-IL", { hour12: false });
 
       setTracks((prev) =>
@@ -1604,52 +1876,48 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
     return "#ffc53d"; // Yellow (Unidentified)
   };
 
-  const handleAction = (action: string, track: Track) => {
-    if (action === "TIGER") {
-      onTriggerAlert(`נוהל נמר פעיל בגזרת גבול הצפון! כלי טיס עוין/חשוד (${track.id}) זוהה.`, {
-        alertType: "TIGER",
-        threatLocation: { lat: track.coordinates.lat, lng: track.coordinates.lng }
-      });
-      setTigerTrackId(track.id);
-      setTigerTimer(15);
-      setTracks((prev) =>
-        prev.map((t) => (t.id === track.id ? { ...t, iffStatus: "RED_CERTAIN" } : t))
-      );
-      if (selectedTrack?.id === track.id) {
-        setSelectedTrack((prev) => prev ? { ...prev, iffStatus: "RED_CERTAIN" } : null);
-      }
-    } else if (action === "HAMMER") {
-      onTriggerAlert(`פטיש אוויר פעיל בגזרה הצפונית! שובש מרחב התדרים. הנחת את הרחפנים מייד.`, {
-        alertType: "HAMMER"
-      });
-      if (tigerTrackId === track.id) {
-        setTigerTrackId(null);
-        setTigerTimer(0);
-      }
-    } else if (action === "BLUE") {
-      setTracks((prev) =>
-        prev.map((t) => (t.id === track.id ? { ...t, iffStatus: "BLUE_CERTAIN" } : t))
-      );
-      if (selectedTrack?.id === track.id) {
-        setSelectedTrack((prev) => prev ? { ...prev, iffStatus: "BLUE_CERTAIN" } : null);
-      }
-      if (tigerTrackId === track.id) {
-        setTigerTrackId(null);
-        setTigerTimer(0);
+  const allActiveTracks = [...tracks, ...liveTracks];
+
+  // ארגון המרחב priority: a track's queue priority comes from the highest-scoring
+  // space-area it falls inside (ties resolved by score); tracks outside every drawn
+  // area sink to the bottom, since there's no area score to prioritize them by.
+  const NO_SPACE_AREA_PRIORITY = -1;
+  const getContainingSpaceArea = (coords: { lat: number; lng: number }): SpaceArea | undefined => {
+    let best: SpaceArea | undefined;
+    for (const area of spaceAreas) {
+      // Unscored objects are pure annotation — they take no part in prioritization.
+      if (area.score === null || area.score === undefined) continue;
+      if (areaContainsPoint(area, coords.lat, coords.lng) && (!best || area.score > best.score!)) {
+        best = area;
       }
     }
+    return best;
   };
+  const withSpaceAreaPriority = (list: Track[]) =>
+    list
+      .map((track) => ({ track, area: getContainingSpaceArea(track.coordinates) }))
+      .sort((a, b) => (b.area?.score ?? NO_SPACE_AREA_PRIORITY) - (a.area?.score ?? NO_SPACE_AREA_PRIORITY));
 
-  const allActiveTracks = [...tracks, ...liveTracks];
-  const friendlyTracks = allActiveTracks.filter(
-    (t) => getIFFColor(t.iffStatus) === "#186eff"
+  const friendlyTracks = withSpaceAreaPriority(
+    allActiveTracks.filter((t) => getIFFColor(t.iffStatus) === "#186eff")
   );
-  const hostileOrUnidentifiedTracks = allActiveTracks.filter(
-    (t) => getIFFColor(t.iffStatus) !== "#186eff"
+  const hostileOrUnidentifiedTracks = withSpaceAreaPriority(
+    allActiveTracks.filter((t) => getIFFColor(t.iffStatus) !== "#186eff")
   );
 
   return (
     <div style={styles.container}>
+      {/* RF coverage fill pattern — thin diagonal hatching, referenced by id from the
+          antenna sector/omni shapes so they read as an estimate, not a drawn boundary
+          (unlike the solid-fill ארגון המרחב polygons). Zero-size SVG so it never paints
+          itself; url(#…) fill references resolve document-wide regardless of nesting. */}
+      <svg width="0" height="0" style={{ position: "absolute" }}>
+        <defs>
+          <pattern id="rf-coverage-hatch" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
+            <line x1="0" y1="0" x2="0" y2="6" stroke={ANTENNA_MARKER_COLOR} strokeWidth="1" />
+          </pattern>
+        </defs>
+      </svg>
       <style>{`
         @keyframes radar-spin {
           from { transform: rotate(0deg); }
@@ -1674,6 +1942,24 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
         @keyframes hostile-warn {
           0%, 100% { transform: scale(1); }
           50% { transform: scale(1.05); }
+        }
+        .leaflet-interactive:focus {
+          outline: none;
+        }
+        .space-area-label.leaflet-tooltip {
+          background: rgba(15, 23, 42, 0.8);
+          border: 1px solid rgba(255, 255, 255, 0.15);
+          border-radius: 4px;
+          color: #fff;
+          font-size: 10px;
+          font-weight: bold;
+          padding: 1px 6px;
+          box-shadow: none;
+          white-space: nowrap;
+          pointer-events: none;
+        }
+        .space-area-label.leaflet-tooltip::before {
+          display: none;
         }
         .radar-sweep {
           transform-origin: 12px 12px;
@@ -1701,8 +1987,452 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
           filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
         }
       `}</style>
-      {/* Side Panel: Airspace Situation info (תמונת שמיים) OR Requests Queue Panel */}
-      {showRequestsQueue ? (
+      {/* Side Panel: ארגון המרחב workspace, Requests Queue, or Airspace Situation info */}
+      {showSpaceOrgPanel ? (
+        <div style={styles.requestsPanel}>
+          <div style={styles.panelHeader}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={styles.requestsPanelTitle}>ארגון המרחב</span>
+              <span style={styles.panelBadge}>{spaceAreas.length}</span>
+            </div>
+          </div>
+
+          <div style={{ padding: "12px", overflowY: "auto", flex: 1, display: "flex", flexDirection: "column", gap: "12px" }}>
+            {isEditingSpaceAreaShape ? (
+              <>
+                <div style={styles.spaceToolHint}>
+                  <span>גרור נקודות למיקום חדש, או לחץ על המפה להוספת נקודה</span>
+                  <span style={{ fontWeight: "bold" }}>נקודות: {currentSpaceAreaEditPoints.length}</span>
+                </div>
+                <div style={{ display: "flex", gap: "6px" }}>
+                  <button
+                    onClick={() => setCurrentSpaceAreaEditPoints(prev => prev.slice(0, -1))}
+                    disabled={currentSpaceAreaEditPoints.length === 0}
+                    style={{
+                      ...styles.adminFocusBtn,
+                      flex: 1,
+                      cursor: currentSpaceAreaEditPoints.length === 0 ? "not-allowed" : "pointer",
+                      opacity: currentSpaceAreaEditPoints.length === 0 ? 0.5 : 1,
+                    }}
+                  >
+                    ↩ מחק נקודה
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIsEditingSpaceAreaShape(false);
+                      setSpaceAreaShapeEditTarget(null);
+                    }}
+                    style={{ ...styles.adminFocusBtn, flex: 1, color: "#ef4444", borderColor: "rgba(239,68,68,0.4)" }}
+                  >
+                    ✕ ביטול
+                  </button>
+                </div>
+                <button
+                  onClick={() => {
+                    if (currentSpaceAreaEditPoints.length < 2) {
+                      alert("נדרשות לפחות 2 נקודות");
+                      return;
+                    }
+                    if (spaceAreaShapeEditTarget) {
+                      const updated = { ...spaceAreaShapeEditTarget, points: currentSpaceAreaEditPoints };
+                      onUpsertSpaceArea?.(updated);
+                      setSelectedSpaceArea(updated);
+                      setSpaceAreaEditDraft(updated);
+                      showToast("גבולות המרחב עודכנו בהצלחה", "SUCCESS");
+                    }
+                    setIsEditingSpaceAreaShape(false);
+                    setSpaceAreaShapeEditTarget(null);
+                  }}
+                  style={styles.spacePrimaryBtn}
+                >
+                  ✓ שמירת צורה
+                </button>
+              </>
+            ) : (
+              <>
+                {spaceAreas.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                    <span style={styles.spaceSectionLabel}>מרחבים וסימונים ({spaceAreas.length})</span>
+                    <span style={{ fontSize: "9px", color: "var(--neutral-10)", marginBottom: "2px" }}>
+                      מסודר מהשכבה הקדמית לאחורית · לחיצה ממקדת במפה
+                    </span>
+                    {[...orderedSpaceAreas].reverse().map((area, idx, list) => {
+                      const creation = formatCreationDetails(area);
+                      return (
+                        <div
+                          key={area.id}
+                          onClick={() => {
+                            setSelectedSpaceArea(area);
+                            setFlyToTarget([...getSpaceAreaCenter(area.points), 14]);
+                          }}
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "4px",
+                            padding: "7px 8px",
+                            borderRadius: "4px",
+                            backgroundColor: selectedSpaceArea?.id === area.id ? "rgba(34,197,94,0.12)" : "var(--neutral-3)",
+                            border: `1px solid ${selectedSpaceArea?.id === area.id ? "rgba(34,197,94,0.4)" : "var(--color-border-subtle)"}`,
+                            cursor: "pointer",
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "6px" }}>
+                            <span style={{ display: "flex", alignItems: "center", gap: "6px", overflow: "hidden" }}>
+                              <span style={{ width: "9px", height: "9px", borderRadius: "50%", backgroundColor: area.color, flexShrink: 0 }} />
+                              <span style={{ fontSize: "11px", color: "var(--color-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {area.name}
+                              </span>
+                              <span style={{ fontSize: "9px", color: "var(--neutral-10)", flexShrink: 0 }}>
+                                {SPACE_AREA_SHAPE_LABELS[area.shape] ?? ""}
+                              </span>
+                            </span>
+                            <span style={{ display: "flex", alignItems: "center", gap: "4px", flexShrink: 0 }}>
+                              {area.score === null || area.score === undefined ? (
+                                <span style={{ fontSize: "9px", color: "var(--neutral-10)" }}>ללא ציון</span>
+                              ) : (
+                                <span style={{
+                                  fontSize: "10px",
+                                  fontWeight: "bold",
+                                  color: "#fff",
+                                  backgroundColor: spaceAreaScoreToColor(area.score),
+                                  borderRadius: "3px",
+                                  padding: "1px 6px",
+                                }}>
+                                  {area.score}
+                                </span>
+                              )}
+                              <button
+                                title="הבא קדימה"
+                                disabled={idx === 0}
+                                onClick={(e) => { e.stopPropagation(); moveSpaceAreaInStack(area, "FRONT"); }}
+                                style={{ ...styles.spaceStackBtn, opacity: idx === 0 ? 0.3 : 1, cursor: idx === 0 ? "not-allowed" : "pointer" }}
+                              >
+                                ▲
+                              </button>
+                              <button
+                                title="שלח לאחור"
+                                disabled={idx === list.length - 1}
+                                onClick={(e) => { e.stopPropagation(); moveSpaceAreaInStack(area, "BACK"); }}
+                                style={{ ...styles.spaceStackBtn, opacity: idx === list.length - 1 ? 0.3 : 1, cursor: idx === list.length - 1 ? "not-allowed" : "pointer" }}
+                              >
+                                ▼
+                              </button>
+                            </span>
+                          </div>
+
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "6px" }}>
+                            <span style={{ fontSize: "9px", color: "var(--neutral-10)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {creation || "—"}
+                            </span>
+                            <span style={{ display: "flex", alignItems: "center", gap: "4px", flexShrink: 0 }}>
+                              <button
+                                title="עריכה"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedSpaceArea(area);
+                                  setSpaceAreaEditDraft({ ...area });
+                                }}
+                                style={{ ...styles.spaceStackBtn, fontSize: "10px", padding: "3px 6px", cursor: "pointer" }}
+                              >
+                                ✏️
+                              </button>
+                              <button
+                                title="מחיקה"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (!confirm(`למחוק את "${area.name}"?`)) return;
+                                  onRemoveSpaceArea?.(area.id);
+                                  if (selectedSpaceArea?.id === area.id) {
+                                    setSelectedSpaceArea(null);
+                                    setSpaceAreaEditDraft(null);
+                                  }
+                                }}
+                                style={{ ...styles.spaceStackBtn, fontSize: "10px", padding: "3px 6px", cursor: "pointer", color: "#ef4444", borderColor: "rgba(239,68,68,0.4)" }}
+                              >
+                                🗑
+                              </button>
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {!toolPaletteOpen ? (
+                  <button
+                    onClick={() => setToolPaletteOpen(true)}
+                    style={styles.spacePrimaryBtn}
+                  >
+                    + מרחב חדש
+                  </button>
+                ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span style={styles.spaceSectionLabel}>כלי סרטוט</span>
+                    <button
+                      onClick={() => {
+                        cancelDrawing();
+                        setMeasurePoints([]);
+                        setToolPaletteOpen(false);
+                      }}
+                      title="סגירת כלי הסרטוט"
+                      style={{ ...styles.spaceStackBtn, fontSize: "10px", padding: "3px 6px", cursor: "pointer" }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "5px" }}>
+                    {SPACE_TOOLS.map(({ tool, label, Icon }) => {
+                      const isActive = activeTool === tool;
+                      return (
+                        <button
+                          key={tool}
+                          title={label}
+                          onClick={() => {
+                            if (isActive) {
+                              cancelDrawing();
+                              setMeasurePoints([]);
+                              return;
+                            }
+                            setActiveTool(tool);
+                            resetDraft();
+                            setMeasurePoints([]);
+                            setSelectedSpaceArea(null);
+                            setSpaceAreaEditDraft(null);
+                          }}
+                          style={{
+                            ...styles.spaceToolBtn,
+                            backgroundColor: isActive ? "rgba(34,197,94,0.18)" : "var(--neutral-3)",
+                            borderColor: isActive ? "rgba(34,197,94,0.5)" : "var(--color-border-subtle)",
+                            color: isActive ? "#22c55e" : "var(--color-text)",
+                          }}
+                        >
+                          <Icon size={15} />
+                          <span style={{ fontSize: "9px" }}>{label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                )}
+
+                {activeTool === "MEASURE" && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                    <div style={{ ...styles.spaceToolHint, color: "#22d3ee", backgroundColor: "rgba(34,211,238,0.1)", borderColor: "rgba(34,211,238,0.4)" }}>
+                      <span>לחץ על המפה לסימון נקודות מדידה</span>
+                      <span style={{ fontWeight: "bold" }}>
+                        מרחק: {formatDistance(pathLengthMeters(measurePoints))}
+                      </span>
+                      {measurePoints.length >= 3 && (
+                        <span style={{ fontWeight: "bold" }}>
+                          שטח: {formatArea(polygonAreaSqMeters(measurePoints))}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ display: "flex", gap: "6px" }}>
+                      <button
+                        onClick={() => setMeasurePoints(prev => prev.slice(0, -1))}
+                        disabled={measurePoints.length === 0}
+                        style={{
+                          ...styles.adminFocusBtn,
+                          flex: 1,
+                          cursor: measurePoints.length === 0 ? "not-allowed" : "pointer",
+                          opacity: measurePoints.length === 0 ? 0.5 : 1,
+                        }}
+                      >
+                        ↩ מחק נקודה
+                      </button>
+                      <button
+                        onClick={() => { setMeasurePoints([]); setActiveTool(null); }}
+                        style={{ ...styles.adminFocusBtn, flex: 1, color: "#ef4444", borderColor: "rgba(239,68,68,0.4)" }}
+                      >
+                        ✕ סיום מדידה
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {isDrawingSpaceArea && (
+                  <>
+                    <div style={styles.spaceToolHint}>
+                      <span>{SPACE_TOOL_HINTS[activeTool]}</span>
+                      <span style={{ fontWeight: "bold" }}>
+                        {activeTool === "CIRCLE"
+                          ? `רדיוס: ${formatDistance(draftRadiusMeters)}`
+                          : `נקודות שסומנו: ${draftPoints.length}`}
+                      </span>
+                    </div>
+
+                    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                      <label style={styles.spaceSectionLabel}>שם</label>
+                      <input
+                        type="text"
+                        value={newSpaceAreaName}
+                        onChange={(e) => setNewSpaceAreaName(e.target.value)}
+                        placeholder={SPACE_AREA_SHAPE_LABELS[activeTool]}
+                        style={styles.adminInput}
+                      />
+                    </div>
+
+                    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--color-text-muted)", cursor: "pointer" }}>
+                        <input
+                          type="checkbox"
+                          checked={newSpaceAreaScore === null}
+                          onChange={(e) => setNewSpaceAreaScore(e.target.checked ? null : 5)}
+                        />
+                        ללא ציון (לא משפיע על תעדוף התור)
+                      </label>
+                      {newSpaceAreaScore !== null && (
+                        <>
+                          <label style={styles.spaceSectionLabel}>
+                            ציון כללי: <span style={{ fontWeight: "bold", color: spaceAreaScoreToColor(newSpaceAreaScore) }}>{newSpaceAreaScore}</span>
+                          </label>
+                          <input
+                            type="range"
+                            min={SPACE_AREA_MIN_SCORE}
+                            max={SPACE_AREA_MAX_SCORE}
+                            step={1}
+                            value={newSpaceAreaScore}
+                            onChange={(e) => setNewSpaceAreaScore(parseInt(e.target.value, 10))}
+                          />
+                        </>
+                      )}
+                    </div>
+
+                    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                      <label style={styles.spaceSectionLabel}>צבע</label>
+                      {renderSpaceAreaColorSwatches(newSpaceAreaColor, setNewSpaceAreaColor)}
+                    </div>
+
+                    <div style={{ display: "flex", gap: "6px" }}>
+                      <button
+                        onClick={() => { setDraftPoints(prev => prev.slice(0, -1)); setDraftComplete(false); }}
+                        disabled={draftPoints.length === 0}
+                        style={{
+                          ...styles.adminFocusBtn,
+                          flex: 1,
+                          cursor: draftPoints.length === 0 ? "not-allowed" : "pointer",
+                          opacity: draftPoints.length === 0 ? 0.5 : 1,
+                        }}
+                      >
+                        ↩ בטל נקודה
+                      </button>
+                      <button
+                        onClick={cancelDrawing}
+                        style={{ ...styles.adminFocusBtn, flex: 1, color: "#ef4444", borderColor: "rgba(239,68,68,0.4)" }}
+                      >
+                        ✕ ביטול
+                      </button>
+                    </div>
+
+                    <button
+                      onClick={saveDraft}
+                      disabled={!canSaveDraft}
+                      style={{
+                        ...styles.spacePrimaryBtn,
+                        cursor: canSaveDraft ? "pointer" : "not-allowed",
+                        opacity: canSaveDraft ? 1 : 0.5,
+                      }}
+                    >
+                      ✓ שמירה
+                    </button>
+                  </>
+                )}
+
+
+                {spaceAreaEditDraft && selectedSpaceArea && (
+                  <div style={{ borderTop: "1px solid var(--color-border-subtle)", paddingTop: "10px", display: "flex", flexDirection: "column", gap: "6px" }}>
+                    <span style={styles.spaceSectionLabel}>עריכה</span>
+                    <input
+                      type="text"
+                      value={spaceAreaEditDraft.name}
+                      onChange={(e) => setSpaceAreaEditDraft({ ...spaceAreaEditDraft, name: e.target.value })}
+                      style={styles.adminInput}
+                    />
+                    <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--color-text-muted)", cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={spaceAreaEditDraft.score === null || spaceAreaEditDraft.score === undefined}
+                        onChange={(e) => setSpaceAreaEditDraft({ ...spaceAreaEditDraft, score: e.target.checked ? null : 5 })}
+                      />
+                      ללא ציון
+                    </label>
+                    {spaceAreaEditDraft.score !== null && spaceAreaEditDraft.score !== undefined && (
+                      <>
+                        <label style={styles.spaceSectionLabel}>
+                          ציון כללי: <span style={{ fontWeight: "bold", color: spaceAreaScoreToColor(spaceAreaEditDraft.score) }}>{spaceAreaEditDraft.score}</span>
+                        </label>
+                        <input
+                          type="range"
+                          min={SPACE_AREA_MIN_SCORE}
+                          max={SPACE_AREA_MAX_SCORE}
+                          step={1}
+                          value={spaceAreaEditDraft.score}
+                          onChange={(e) => setSpaceAreaEditDraft({ ...spaceAreaEditDraft, score: parseInt(e.target.value, 10) })}
+                        />
+                      </>
+                    )}
+                    <label style={styles.spaceSectionLabel}>צבע</label>
+                    {renderSpaceAreaColorSwatches(spaceAreaEditDraft.color, (color) => setSpaceAreaEditDraft({ ...spaceAreaEditDraft, color }))}
+
+                    {spaceAreaEditDraft.shape === "CIRCLE" && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                        <label style={styles.spaceSectionLabel}>רדיוס (מטרים)</label>
+                        <input
+                          type="number"
+                          min={10}
+                          value={Math.round(spaceAreaEditDraft.radiusMeters ?? 0)}
+                          onChange={(e) => setSpaceAreaEditDraft({ ...spaceAreaEditDraft, radiusMeters: Math.max(10, parseInt(e.target.value, 10) || 0) })}
+                          style={styles.adminInput}
+                        />
+                      </div>
+                    )}
+
+                    {isVertexEditableShape(spaceAreaEditDraft.shape) && (
+                      <button
+                        onClick={() => {
+                          setIsEditingSpaceAreaShape(true);
+                          setSpaceAreaShapeEditTarget(spaceAreaEditDraft);
+                          setCurrentSpaceAreaEditPoints([...spaceAreaEditDraft.points]);
+                          setActiveTool(null);
+                        }}
+                        style={{ ...styles.adminFocusBtn, color: "#eab308", borderColor: "rgba(234,179,8,0.4)" }}
+                      >
+                        ✏ עריכת צורה
+                      </button>
+                    )}
+
+                    <div style={{ display: "flex", gap: "6px" }}>
+                      <button
+                        onClick={() => {
+                          onUpsertSpaceArea?.(spaceAreaEditDraft);
+                          setSelectedSpaceArea(null);
+                          setSpaceAreaEditDraft(null);
+                        }}
+                        style={{ ...styles.adminFocusBtn, flex: 1, color: "#22c55e", borderColor: "rgba(34,197,94,0.4)" }}
+                      >
+                        ✓ שמירה
+                      </button>
+                      <button
+                        onClick={() => {
+                          onRemoveSpaceArea?.(spaceAreaEditDraft.id);
+                          setSelectedSpaceArea(null);
+                          setSpaceAreaEditDraft(null);
+                        }}
+                        style={{ ...styles.adminFocusBtn, flex: 1, color: "#ef4444", borderColor: "rgba(239,68,68,0.4)" }}
+                      >
+                        🗑 מחיקה
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      ) : showRequestsQueue ? (
         <div style={styles.requestsPanel}>
           <div style={styles.panelHeader}>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -2377,6 +3107,270 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
           </div>
           )}
         </div>
+      ) : showPenetrationRoutesPanel ? (
+        <div style={styles.requestsPanel}>
+          <div style={styles.panelHeader}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={styles.requestsPanelTitle}>נתיבי חדירה</span>
+              <span style={styles.panelBadge}>{enemyDetections.length}</span>
+            </div>
+          </div>
+
+          <div style={{ padding: "12px", overflowY: "auto", flex: 1, display: "flex", flexDirection: "column", gap: "14px" }}>
+            <div>
+              <span style={styles.spaceSectionLabel}>טווח תאריכים</span>
+              <div style={{ ...styles.enemyQuickRangeRow, marginTop: "6px" }}>
+                {(["24h", "7d", "30d"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => {
+                      const durationsMs: Record<"24h" | "7d" | "30d", number> = {
+                        "24h": 24 * 60 * 60 * 1000,
+                        "7d": 7 * 24 * 60 * 60 * 1000,
+                        "30d": 30 * 24 * 60 * 60 * 1000,
+                      };
+                      setEnemyDateRangeMode(mode);
+                      setEnemyPendingRange(null);
+                      setEnemyRangeEnd(MOCK_DATA_RANGE_END_MS);
+                      setEnemyRangeStart(MOCK_DATA_RANGE_END_MS - durationsMs[mode]);
+                    }}
+                    style={{
+                      ...styles.enemyQuickRangeBtn,
+                      backgroundColor: enemyDateRangeMode === mode ? "#ff3d3d" : "var(--neutral-3)",
+                      color: enemyDateRangeMode === mode ? "#fff" : "var(--color-text)",
+                    }}
+                  >
+                    {mode === "24h" ? "24 ש'" : mode === "7d" ? "7 ימים" : "30 יום"}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setEnemyDateRangeMode("custom")}
+                  style={{
+                    ...styles.enemyQuickRangeBtn,
+                    backgroundColor: enemyDateRangeMode === "custom" ? "#ff3d3d" : "var(--neutral-3)",
+                    color: enemyDateRangeMode === "custom" ? "#fff" : "var(--color-text)",
+                  }}
+                >
+                  מותאם
+                </button>
+              </div>
+              {enemyDateRangeMode === "custom" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "6px" }}>
+                  <input
+                    type="datetime-local"
+                    value={msToDatetimeLocalValue(enemyRangeStart)}
+                    onChange={(e) => {
+                      const ms = datetimeLocalValueToMs(e.target.value);
+                      if (ms !== null) setEnemyRangeStart(ms);
+                    }}
+                    style={{ ...styles.adminInput }}
+                  />
+                  <input
+                    type="datetime-local"
+                    value={msToDatetimeLocalValue(enemyRangeEnd)}
+                    onChange={(e) => {
+                      const ms = datetimeLocalValueToMs(e.target.value);
+                      if (ms !== null) setEnemyRangeEnd(ms);
+                    }}
+                    style={{ ...styles.adminInput }}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div>
+              <span style={{ ...styles.spaceSectionLabel, display: "block", marginBottom: "6px" }}>סוג זיהוי</span>
+              <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                {(
+                  [
+                    ["RADAR", 'מכ"ם'],
+                    ["RF_FINDER", "איתור RF"],
+                    ["OPTICAL", "אופטי"],
+                    ["EXTERNAL_SYSTEM", "מערכת חיצונית"],
+                  ] as [SensorType, string][]
+                ).map(([type, label]) => (
+                  <label key={type} style={styles.layerCheckboxRow}>
+                    <input
+                      type="checkbox"
+                      checked={enemySensorTypeFilter.has(type)}
+                      onChange={() =>
+                        setEnemySensorTypeFilter((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(type)) next.delete(type);
+                          else next.add(type);
+                          return next;
+                        })
+                      }
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <span style={{ ...styles.spaceSectionLabel, display: "block", marginBottom: "6px" }}>סטטוס IFF</span>
+              <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                {(
+                  [
+                    ["RED_CERTAIN", "אדום ודאי"],
+                    ["RED_SUSPICIOUS", "חשד אדום"],
+                    ["UNIDENTIFIED", "לא מזוהה"],
+                  ] as [IffStatus, string][]
+                ).map(([status, label]) => (
+                  <label key={status} style={styles.layerCheckboxRow}>
+                    <input
+                      type="checkbox"
+                      checked={enemyIffFilter.has(status)}
+                      onChange={() =>
+                        setEnemyIffFilter((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(status)) next.delete(status);
+                          else next.add(status);
+                          return next;
+                        })
+                      }
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <span style={{ ...styles.spaceSectionLabel, display: "block", marginBottom: "6px" }}>תצוגה</span>
+              <div style={styles.enemyModeRow}>
+                {(
+                  [
+                    ["heat", "שכבת חום", Flame],
+                    ["tracks", "נתיבי חדירה", Route],
+                    ["combined", "משולב", Layers],
+                  ] as [typeof enemyDisplayMode, string, typeof Flame][]
+                ).map(([mode, label, Icon]) => (
+                  <button
+                    key={mode}
+                    onClick={() => setEnemyDisplayMode(mode)}
+                    style={{
+                      ...styles.enemyModeBtn,
+                      backgroundColor: enemyDisplayMode === mode ? "#ff3d3d" : "var(--neutral-3)",
+                      color: enemyDisplayMode === mode ? "#fff" : "var(--color-text)",
+                    }}
+                  >
+                    <Icon size={13} />
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ fontSize: "10px", color: "var(--color-text-muted)", borderTop: "1px solid var(--color-border-subtle)", paddingTop: "10px" }}>
+              {enemyDetections.length} גילויים בטווח שנבחר
+            </div>
+          </div>
+        </div>
+      ) : showRfPlanningPanel ? (
+        <div style={styles.requestsPanel}>
+          <div style={styles.panelHeader}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={styles.requestsPanelTitle}>תכנון RF</span>
+              <span style={styles.panelBadge}>{antennas.length}</span>
+            </div>
+          </div>
+
+          <div style={{ padding: "12px", overflowY: "auto", flex: 1, display: "flex", flexDirection: "column", gap: "14px" }}>
+            {antennaPlacementPresetId ? (
+              <div style={{
+                fontSize: "10px",
+                color: "#f59e0b",
+                backgroundColor: "rgba(245,158,11,0.1)",
+                border: "1px solid rgba(245,158,11,0.4)",
+                borderRadius: "4px",
+                padding: "6px 8px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "6px",
+              }}>
+                <span>לחץ על המפה למיקום האנטנה</span>
+                <button
+                  onClick={() => setAntennaPlacementPresetId(null)}
+                  style={{ background: "none", border: "none", color: "#f59e0b", cursor: "pointer", fontWeight: "bold" }}
+                >
+                  ביטול
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                <span style={styles.spaceSectionLabel}>הוספת אנטנה חדשה</span>
+                <select
+                  value={pendingAntennaPresetId}
+                  onChange={(e) => setPendingAntennaPresetId(e.target.value)}
+                  style={styles.adminSelect}
+                >
+                  {ANTENNA_PRESETS.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => {
+                    setAdminClickToMove(false);
+                    setAntennaPlacementPresetId(pendingAntennaPresetId);
+                  }}
+                  style={{
+                    backgroundColor: "rgba(245,158,11,0.15)",
+                    color: "#f59e0b",
+                    border: "1px solid rgba(245,158,11,0.4)",
+                    borderRadius: "4px",
+                    padding: "7px 8px",
+                    fontSize: "11px",
+                    fontWeight: "bold",
+                    cursor: "pointer",
+                  }}
+                >
+                  📍 הצב על המפה
+                </button>
+              </div>
+            )}
+
+            {antennas.length > 0 && (
+              <div style={{ borderTop: "1px solid var(--color-border-subtle)", paddingTop: "10px", display: "flex", flexDirection: "column", gap: "5px" }}>
+                <span style={styles.spaceSectionLabel}>אנטנות פרוסות ({antennas.length})</span>
+                {antennas.map((ant) => {
+                  const preset = getAntennaPreset(ant.presetId);
+                  const edited = computeIsEdited(ant, preset);
+                  return (
+                    <div
+                      key={ant.id}
+                      onClick={() => {
+                        setSelectedAntenna(ant);
+                        setAntennaEditDraft({ ...ant });
+                        setFlyToTarget([ant.coordinates[0], ant.coordinates[1], 15]);
+                      }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: "6px",
+                        padding: "6px 8px",
+                        borderRadius: "4px",
+                        backgroundColor: selectedAntenna?.id === ant.id ? "rgba(245,158,11,0.12)" : "var(--neutral-3)",
+                        border: `1px solid ${selectedAntenna?.id === ant.id ? "rgba(245,158,11,0.4)" : "var(--color-border-subtle)"}`,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <span style={{ fontSize: "11px", color: "var(--color-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {ant.name}
+                      </span>
+                      {edited && (
+                        <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#e74c3c", flexShrink: 0 }} />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
       ) : (
         <div style={styles.sidePanel}>
           <h3 style={styles.panelTitle}>תמונת שמיים חטיבתית</h3>
@@ -2398,7 +3392,7 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                 hostileOrUnidentifiedTracks.length === 0 ? (
                   <div style={{ fontSize: "11px", color: "var(--neutral-10)", padding: "10px", textAlign: "center" }}>אין אירועים פתוחים</div>
                 ) : (
-                  hostileOrUnidentifiedTracks.map((t) => (
+                  hostileOrUnidentifiedTracks.map(({ track: t, area }) => (
                     <div
                       key={t.id}
                       onClick={(e) => { e.stopPropagation(); focusTrack(t); }}
@@ -2425,6 +3419,12 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                         <div style={{ fontSize: "11px", color: "var(--neutral-10)", marginTop: "4px" }}>
                           {t.type} · גובה {t.coordinates.altMsl}מ'
                         </div>
+                        {area && (
+                          <div style={{ display: "flex", alignItems: "center", gap: "4px", marginTop: "4px" }}>
+                            <span style={{ width: "7px", height: "7px", borderRadius: "50%", backgroundColor: area.color, flexShrink: 0 }} />
+                            <span style={{ fontSize: "10px", color: "var(--neutral-10)" }}>{area.name} · {area.score}</span>
+                          </div>
+                        )}
                       </div>
                       <button
                         onClick={(e) => {
@@ -2471,7 +3471,7 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                 friendlyTracks.length === 0 ? (
                   <div style={{ fontSize: "11px", color: "var(--neutral-10)", padding: "10px", textAlign: "center" }}>אין כלים של כוחותינו באוויר</div>
                 ) : (
-                  friendlyTracks.map((t) => (
+                  friendlyTracks.map(({ track: t, area }) => (
                     <div
                       key={t.id}
                       onClick={(e) => { e.stopPropagation(); focusTrack(t); }}
@@ -2496,6 +3496,12 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                         <div style={{ fontSize: "11px", color: "var(--neutral-10)", marginTop: "4px" }}>
                           {t.type} · גובה {t.coordinates.altMsl}מ'
                         </div>
+                        {area && (
+                          <div style={{ display: "flex", alignItems: "center", gap: "4px", marginTop: "4px" }}>
+                            <span style={{ width: "7px", height: "7px", borderRadius: "50%", backgroundColor: area.color, flexShrink: 0 }} />
+                            <span style={{ fontSize: "10px", color: "var(--neutral-10)" }}>{area.name} · {area.score}</span>
+                          </div>
+                        )}
                       </div>
                       <button
                         onClick={(e) => {
@@ -2636,277 +3642,12 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
               </label>
               <label style={styles.layerCheckboxRow}>
                 <input type="checkbox" checked={showEnemyHeatmap} onChange={(e) => setShowEnemyHeatmap(e.target.checked)} />
-                תמונת מצב אויב
+                נתיבי חדירה
               </label>
-            </div>
-          )}
-        </div>
-
-        {/* Floating RF antenna widget above the map */}
-        <div style={styles.floatingAntennaWidget}>
-          <button style={styles.floatingAntennaToggle} onClick={() => setAntennaWidgetOpen(!antennaWidgetOpen)}>
-            📡 אנטנות RF {antennaWidgetOpen ? "▲" : "▼"}
-          </button>
-          {antennaWidgetOpen && (
-            <div style={styles.floatingAntennaContent}>
-              {antennaPlacementPresetId ? (
-                <div style={{
-                  fontSize: "10px",
-                  color: "#f59e0b",
-                  backgroundColor: "rgba(245,158,11,0.1)",
-                  border: "1px solid rgba(245,158,11,0.4)",
-                  borderRadius: "4px",
-                  padding: "6px 8px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "6px",
-                }}>
-                  <span>לחץ על המפה למיקום האנטנה</span>
-                  <button
-                    onClick={() => setAntennaPlacementPresetId(null)}
-                    style={{ background: "none", border: "none", color: "#f59e0b", cursor: "pointer", fontWeight: "bold" }}
-                  >
-                    ביטול
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <span style={{ fontSize: "11px", fontWeight: "bold", color: "var(--color-text-muted)" }}>הוספת אנטנה חדשה</span>
-                  <select
-                    value={pendingAntennaPresetId}
-                    onChange={(e) => setPendingAntennaPresetId(e.target.value)}
-                    style={styles.adminSelect}
-                  >
-                    {ANTENNA_PRESETS.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => {
-                      setAdminClickToMove(false);
-                      setAntennaPlacementPresetId(pendingAntennaPresetId);
-                    }}
-                    style={{
-                      backgroundColor: "rgba(245,158,11,0.15)",
-                      color: "#f59e0b",
-                      border: "1px solid rgba(245,158,11,0.4)",
-                      borderRadius: "4px",
-                      padding: "6px 8px",
-                      fontSize: "10px",
-                      fontWeight: "bold",
-                      cursor: "pointer",
-                    }}
-                  >
-                    📍 הצב על המפה
-                  </button>
-                </>
-              )}
-
-              {antennas.length > 0 && (
-                <div style={{ borderTop: "1px solid var(--color-border-subtle)", paddingTop: "8px", marginTop: "2px", display: "flex", flexDirection: "column", gap: "5px" }}>
-                  <span style={{ fontSize: "11px", fontWeight: "bold", color: "var(--color-text-muted)" }}>אנטנות פרוסות ({antennas.length})</span>
-                  {antennas.map((ant) => {
-                    const preset = getAntennaPreset(ant.presetId);
-                    const edited = computeIsEdited(ant, preset);
-                    return (
-                      <div
-                        key={ant.id}
-                        onClick={() => {
-                          setSelectedAntenna(ant);
-                          setAntennaEditDraft({ ...ant });
-                        }}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          gap: "6px",
-                          padding: "5px 7px",
-                          borderRadius: "4px",
-                          backgroundColor: selectedAntenna?.id === ant.id ? "rgba(245,158,11,0.12)" : "var(--neutral-3)",
-                          border: `1px solid ${selectedAntenna?.id === ant.id ? "rgba(245,158,11,0.4)" : "var(--color-border-subtle)"}`,
-                          cursor: "pointer",
-                        }}
-                      >
-                        <span style={{ fontSize: "10px", color: "var(--color-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {ant.name}
-                        </span>
-                        {edited && (
-                          <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#e74c3c", flexShrink: 0 }} />
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Floating enemy activity heatmap widget above the map */}
-        <div style={styles.floatingEnemyWidget}>
-          <button style={styles.floatingEnemyToggle} onClick={() => setEnemyWidgetOpen(!enemyWidgetOpen)}>
-            🎯 תמונת מצב אויב {enemyWidgetOpen ? "▲" : "▼"}
-          </button>
-          {enemyWidgetOpen && (
-            <div style={styles.floatingEnemyContent}>
-              <div>
-                <span style={{ fontSize: "11px", fontWeight: "bold", color: "var(--color-text-muted)", display: "block", marginBottom: "6px" }}>
-                  טווח תאריכים
-                </span>
-                <div style={styles.enemyQuickRangeRow}>
-                  {(["24h", "7d", "30d"] as const).map((mode) => (
-                    <button
-                      key={mode}
-                      onClick={() => {
-                        const durationsMs: Record<"24h" | "7d" | "30d", number> = {
-                          "24h": 24 * 60 * 60 * 1000,
-                          "7d": 7 * 24 * 60 * 60 * 1000,
-                          "30d": 30 * 24 * 60 * 60 * 1000,
-                        };
-                        setEnemyDateRangeMode(mode);
-                        setEnemyPendingRange(null);
-                        setEnemyRangeEnd(MOCK_DATA_RANGE_END_MS);
-                        setEnemyRangeStart(MOCK_DATA_RANGE_END_MS - durationsMs[mode]);
-                      }}
-                      style={{
-                        ...styles.enemyQuickRangeBtn,
-                        backgroundColor: enemyDateRangeMode === mode ? "#ff3d3d" : "var(--neutral-3)",
-                        color: enemyDateRangeMode === mode ? "#fff" : "var(--color-text)",
-                      }}
-                    >
-                      {mode === "24h" ? "24 ש'" : mode === "7d" ? "7 ימים" : "30 יום"}
-                    </button>
-                  ))}
-                  <button
-                    onClick={() => setEnemyDateRangeMode("custom")}
-                    style={{
-                      ...styles.enemyQuickRangeBtn,
-                      backgroundColor: enemyDateRangeMode === "custom" ? "#ff3d3d" : "var(--neutral-3)",
-                      color: enemyDateRangeMode === "custom" ? "#fff" : "var(--color-text)",
-                    }}
-                  >
-                    מותאם
-                  </button>
-                </div>
-                {enemyDateRangeMode === "custom" && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "6px" }}>
-                    <input
-                      type="datetime-local"
-                      value={msToDatetimeLocalValue(enemyRangeStart)}
-                      onChange={(e) => {
-                        const ms = datetimeLocalValueToMs(e.target.value);
-                        if (ms !== null) setEnemyRangeStart(ms);
-                      }}
-                      style={{ ...styles.adminInput }}
-                    />
-                    <input
-                      type="datetime-local"
-                      value={msToDatetimeLocalValue(enemyRangeEnd)}
-                      onChange={(e) => {
-                        const ms = datetimeLocalValueToMs(e.target.value);
-                        if (ms !== null) setEnemyRangeEnd(ms);
-                      }}
-                      style={{ ...styles.adminInput }}
-                    />
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <span style={{ fontSize: "11px", fontWeight: "bold", color: "var(--color-text-muted)", display: "block", marginBottom: "6px" }}>
-                  סוג זיהוי
-                </span>
-                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                  {(
-                    [
-                      ["RADAR", 'מכ"ם'],
-                      ["RF_FINDER", "איתור RF"],
-                      ["OPTICAL", "אופטי"],
-                      ["EXTERNAL_SYSTEM", "מערכת חיצונית"],
-                    ] as [SensorType, string][]
-                  ).map(([type, label]) => (
-                    <label key={type} style={styles.layerCheckboxRow}>
-                      <input
-                        type="checkbox"
-                        checked={enemySensorTypeFilter.has(type)}
-                        onChange={() =>
-                          setEnemySensorTypeFilter((prev) => {
-                            const next = new Set(prev);
-                            if (next.has(type)) next.delete(type);
-                            else next.add(type);
-                            return next;
-                          })
-                        }
-                      />
-                      {label}
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <span style={{ fontSize: "11px", fontWeight: "bold", color: "var(--color-text-muted)", display: "block", marginBottom: "6px" }}>
-                  סטטוס IFF (תמונת אויב)
-                </span>
-                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                  {(
-                    [
-                      ["RED_CERTAIN", "אדום ודאי"],
-                      ["RED_SUSPICIOUS", "חשד אדום"],
-                      ["UNIDENTIFIED", "לא מזוהה"],
-                    ] as [IffStatus, string][]
-                  ).map(([status, label]) => (
-                    <label key={status} style={styles.layerCheckboxRow}>
-                      <input
-                        type="checkbox"
-                        checked={enemyIffFilter.has(status)}
-                        onChange={() =>
-                          setEnemyIffFilter((prev) => {
-                            const next = new Set(prev);
-                            if (next.has(status)) next.delete(status);
-                            else next.add(status);
-                            return next;
-                          })
-                        }
-                      />
-                      {label}
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <span style={{ fontSize: "11px", fontWeight: "bold", color: "var(--color-text-muted)", display: "block", marginBottom: "6px" }}>
-                  תצוגה
-                </span>
-                <div style={styles.enemyModeRow}>
-                  {(
-                    [
-                      ["heat", "שכבת חום", Flame],
-                      ["tracks", "נתיבי טיסה", Route],
-                      ["combined", "משולב", Layers],
-                    ] as [typeof enemyDisplayMode, string, typeof Flame][]
-                  ).map(([mode, label, Icon]) => (
-                    <button
-                      key={mode}
-                      onClick={() => setEnemyDisplayMode(mode)}
-                      style={{
-                        ...styles.enemyModeBtn,
-                        backgroundColor: enemyDisplayMode === mode ? "#ff3d3d" : "var(--neutral-3)",
-                        color: enemyDisplayMode === mode ? "#fff" : "var(--color-text)",
-                      }}
-                    >
-                      <Icon size={13} />
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div style={{ fontSize: "10px", color: "var(--color-text-muted)", borderTop: "1px solid var(--color-border-subtle)", paddingTop: "7px" }}>
-                {enemyDetections.length} גילויים בטווח שנבחר
-              </div>
+              <label style={styles.layerCheckboxRow}>
+                <input type="checkbox" checked={showSpaceAreas} onChange={(e) => setShowSpaceAreas(e.target.checked)} />
+                ארגון המרחב
+              </label>
             </div>
           )}
         </div>
@@ -3090,6 +3831,71 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
               }}
             />
 
+            {/* ארגון המרחב drawing tools — polygon/line/freehand keep collecting points,
+                rectangle and circle complete on the second click, marker on the first. */}
+            <MapClickHandler
+              enabled={activeTool !== null || isEditingSpaceAreaShape}
+              onMapClick={(lat, lng) => {
+                if (isEditingSpaceAreaShape) {
+                  setCurrentSpaceAreaEditPoints(prev => [...prev, [lat, lng]]);
+                  return;
+                }
+                if (activeTool === "MEASURE") {
+                  setMeasurePoints(prev => [...prev, [lat, lng]]);
+                  return;
+                }
+                if (draftComplete) return;
+                setDraftPoints(prev => {
+                  const next: [number, number][] = [...prev, [lat, lng]];
+                  if (
+                    activeTool === "MARKER" ||
+                    ((activeTool === "RECTANGLE" || activeTool === "CIRCLE") && next.length === 2)
+                  ) {
+                    setDraftComplete(true);
+                  }
+                  return next;
+                });
+              }}
+            />
+
+            {/* Rubber-band preview while a tool is armed */}
+            <MapMouseMoveHandler
+              enabled={activeTool !== null && !draftComplete}
+              onMove={(lat, lng) => setCursorPoint([lat, lng])}
+            />
+
+            <FreehandDrawHandler
+              enabled={activeTool === "FREEHAND" && !draftComplete}
+              onProgress={(pts) => setDraftPoints(pts)}
+              onComplete={(pts) => {
+                setDraftPoints(pts);
+                setDraftComplete(true);
+              }}
+            />
+
+            {/* Clicking empty map background clears whatever is currently selected — tracks,
+                sensors, antennas, flight requests, ארגון המרחב areas — back to a clean state.
+                Every selectable marker/polygon stops click propagation so this only fires on
+                genuine background clicks, not on the click that made the selection. */}
+            <MapClickHandler
+              enabled={
+                !isDrawingNewPolygon && !isEditingPoints &&
+                activeTool === null && !isEditingSpaceAreaShape &&
+                !antennaPlacementPresetId && !(adminClickToMove && !!selectedAdminItem) &&
+                (!!selectedTrack || !!selectedSensor || !!selectedRequestItem || !!selectedAntenna || !!selectedSpaceArea)
+              }
+              onMapClick={() => {
+                setSelectedTrack(null);
+                setSelectedSensor(null);
+                setSelectedRequestItem(null);
+                setShowRequestDetailsCard(false);
+                setSelectedAntenna(null);
+                setAntennaEditDraft(null);
+                setSelectedSpaceArea(null);
+                setSpaceAreaEditDraft(null);
+              }}
+            />
+
             <MapClickHandler
               enabled={!!antennaPlacementPresetId}
               onMapClick={(lat, lng) => {
@@ -3176,7 +3982,8 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                     positions={z.geometry}
                     pathOptions={{ color, fillColor: color, fillOpacity, dashArray, weight }}
                     eventHandlers={{
-                      click: () => {
+                      click: (e) => {
+                        L.DomEvent.stopPropagation(e);
                         if (matchingReq) {
                           handleRequestClick(matchingReq);
                         }
@@ -3230,7 +4037,8 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                     dashArray,
                   }}
                   eventHandlers={{
-                    click: () => {
+                    click: (e) => {
+                      L.DomEvent.stopPropagation(e);
                       handleRequestClick(r);
                     },
                     contextmenu: (e: any) => {
@@ -3337,6 +4145,225 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
             </>
           )}
 
+          {/* Render ארגון המרחב — saved objects, each in its own shape and custom color,
+              drawn back-to-front so stacked objects layer like slides in a deck */}
+          {showSpaceAreas &&
+            orderedSpaceAreas
+              .filter((area) => !(isEditingSpaceAreaShape && spaceAreaShapeEditTarget?.id === area.id))
+              .map((area) => {
+                const isSelected = selectedSpaceArea?.id === area.id;
+                const registerLayer = (layer: L.Path | null) => {
+                  if (layer) spaceAreaLayersRef.current[area.id] = layer;
+                  else delete spaceAreaLayersRef.current[area.id];
+                };
+                // Clicking a spot covered by several objects steps down through the stack,
+                // so an object underneath a larger one is still reachable by clicking.
+                const select = (e: L.LeafletMouseEvent) => {
+                  // While a drawing/edit tool is armed the click belongs to the tool, so it has
+                  // to bubble through to the map — otherwise you can't draw on top of an
+                  // existing object, which is the whole point of stacking them.
+                  if (activeTool !== null || isEditingSpaceAreaShape) return;
+                  L.DomEvent.stopPropagation(e);
+                  const { lat, lng } = e.latlng;
+                  const stack = areasAtPoint(spaceAreas, lat, lng);
+                  let target = area;
+                  if (stack.length > 1) {
+                    const last = lastStackClickRef.current;
+                    const sameSpot =
+                      last && Math.abs(last.lat - lat) < 0.0004 && Math.abs(last.lng - lng) < 0.0004;
+                    const nextIndex = sameSpot ? (last!.index + 1) % stack.length : 0;
+                    target = stack[nextIndex];
+                    lastStackClickRef.current = { lat, lng, index: nextIndex };
+                    showToast(`${target.name} — ${nextIndex + 1} מתוך ${stack.length} במיקום זה`, "INFO");
+                  } else {
+                    lastStackClickRef.current = null;
+                  }
+                  setSelectedSpaceArea(target);
+                  setSpaceAreaEditDraft({ ...target });
+                };
+                const fillOptions = {
+                  color: area.color,
+                  fillColor: area.color,
+                  fillOpacity: isSelected ? 0.35 : 0.2,
+                  weight: isSelected ? 4 : 2,
+                };
+                // Nested objects share a centroid, so their labels would print on top of each
+                // other. Offset each one by how deep it sits in the stack at that point.
+                const labelCenter = getSpaceAreaCenter(area.points);
+                const nestingDepth = Math.max(
+                  0,
+                  areasAtPoint(spaceAreas, labelCenter[0], labelCenter[1]).findIndex((a) => a.id === area.id)
+                );
+                const label = (
+                  <Tooltip
+                    direction="center"
+                    permanent
+                    interactive={false}
+                    className="space-area-label"
+                    offset={[0, nestingDepth * 16]}
+                  >
+                    {area.score === null || area.score === undefined ? area.name : `${area.name} · ${area.score}`}
+                  </Tooltip>
+                );
+
+                if (area.shape === "CIRCLE") {
+                  return (
+                    <Circle
+                      key={area.id}
+                      ref={registerLayer}
+                      center={area.points[0]}
+                      radius={area.radiusMeters ?? 0}
+                      pathOptions={fillOptions}
+                      eventHandlers={{ click: select }}
+                    >
+                      {label}
+                    </Circle>
+                  );
+                }
+                if (area.shape === "LINE") {
+                  return (
+                    <Polyline
+                      key={area.id}
+                      ref={registerLayer}
+                      positions={area.points}
+                      pathOptions={{ color: area.color, weight: isSelected ? 6 : 4 }}
+                      eventHandlers={{ click: select }}
+                    >
+                      {label}
+                    </Polyline>
+                  );
+                }
+                if (area.shape === "MARKER") {
+                  return (
+                    <Marker
+                      key={area.id}
+                      position={area.points[0]}
+                      icon={createSpaceAreaMarkerIcon(area.color, isSelected)}
+                      eventHandlers={{ click: select }}
+                    >
+                      {label}
+                    </Marker>
+                  );
+                }
+                return (
+                  <Polygon
+                    key={area.id}
+                    ref={registerLayer}
+                    positions={area.points}
+                    pathOptions={fillOptions}
+                    eventHandlers={{ click: select }}
+                  >
+                    {label}
+                  </Polygon>
+                );
+              })}
+
+          {/* Live preview of the object currently being drawn */}
+          {isDrawingSpaceArea && draftShapePoints.length > 0 && (
+            <>
+              {activeTool === "CIRCLE" ? (
+                <Circle
+                  center={draftPoints[0]}
+                  radius={draftRadiusMeters}
+                  pathOptions={{
+                    color: newSpaceAreaColor,
+                    fillColor: newSpaceAreaColor,
+                    fillOpacity: 0.15,
+                    weight: 3,
+                    dashArray: "5, 5",
+                  }}
+                />
+              ) : activeTool === "LINE" || activeTool === "MARKER" || draftShapePoints.length < 3 ? (
+                <Polyline
+                  positions={draftShapePoints}
+                  pathOptions={{ color: newSpaceAreaColor, weight: 3, dashArray: "5, 5" }}
+                />
+              ) : (
+                <Polygon
+                  positions={draftShapePoints}
+                  pathOptions={{
+                    color: newSpaceAreaColor,
+                    fillColor: newSpaceAreaColor,
+                    fillOpacity: 0.15,
+                    weight: 3,
+                    dashArray: "5, 5",
+                  }}
+                />
+              )}
+              {(activeTool === "POLYGON" || activeTool === "LINE" || activeTool === "MARKER" || activeTool === "CIRCLE") &&
+                draftPoints.map((pt, idx) => (
+                  <Marker
+                    key={`space-area-draw-handle-${idx}-${pt[0]}-${pt[1]}`}
+                    position={pt}
+                    icon={createEditHandleIcon(idx + 1, newSpaceAreaColor)}
+                  />
+                ))}
+            </>
+          )}
+
+          {/* Measurement overlay — transient, never saved */}
+          {activeTool === "MEASURE" && measurePoints.length > 0 && (
+            <>
+              <Polyline
+                positions={cursorPoint ? [...measurePoints, cursorPoint] : measurePoints}
+                pathOptions={{ color: "#22d3ee", weight: 3, dashArray: "6, 4" }}
+              />
+              {measurePoints.map((pt, idx) => (
+                <Marker
+                  key={`measure-handle-${idx}-${pt[0]}-${pt[1]}`}
+                  position={pt}
+                  icon={createEditHandleIcon(idx + 1, "#22d3ee")}
+                />
+              ))}
+            </>
+          )}
+
+          {/* Render ארגון המרחב shape-editing overlay — draggable vertices + click-to-add */}
+          {isEditingSpaceAreaShape && currentSpaceAreaEditPoints.length > 0 && (
+            <>
+              {currentSpaceAreaEditPoints.length >= 3 ? (
+                <Polygon
+                  positions={currentSpaceAreaEditPoints}
+                  pathOptions={{
+                    color: "var(--yellow-9)",
+                    fillColor: "var(--yellow-9)",
+                    fillOpacity: 0.22,
+                    weight: 4,
+                    dashArray: "6, 4"
+                  }}
+                />
+              ) : (
+                <Polyline
+                  positions={currentSpaceAreaEditPoints}
+                  pathOptions={{
+                    color: "var(--yellow-9)",
+                    weight: 4,
+                    dashArray: "6, 4"
+                  }}
+                />
+              )}
+              {currentSpaceAreaEditPoints.map((pt, idx) => (
+                <Marker
+                  key={`space-area-edit-handle-${idx}-${pt[0]}-${pt[1]}`}
+                  position={pt}
+                  draggable={true}
+                  eventHandlers={{
+                    dragend: (e) => {
+                      const marker = e.target;
+                      const position = marker.getLatLng();
+                      setCurrentSpaceAreaEditPoints((prev) => {
+                        const next = [...prev];
+                        next[idx] = [position.lat, position.lng];
+                        return next;
+                      });
+                    }
+                  }}
+                  icon={createEditHandleIcon(idx + 1, "var(--yellow-9)")}
+                />
+              ))}
+            </>
+          )}
+
           {/* Render NFZs */}
           {showNFZ &&
             zones
@@ -3422,7 +4449,8 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                 position={s.coordinates}
                 icon={createSensorIcon(s.type, s.color, s.name)}
                 eventHandlers={{
-                  click: () => {
+                  click: (e) => {
+                    L.DomEvent.stopPropagation(e);
                     setSelectedSensor(s);
                     setSelectedTrack(null);
                   },
@@ -3442,12 +4470,12 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                     <Circle
                       center={ant.coordinates}
                       radius={rangeMeters}
-                      pathOptions={{ color: ANTENNA_MARKER_COLOR, fillColor: ANTENNA_MARKER_COLOR, fillOpacity: 0.08, weight: 1.5, dashArray: "3, 6" }}
+                      pathOptions={{ color: "#ffffff", weight: 0.75, fillColor: "url(#rf-coverage-hatch)", fillOpacity: 0.9, dashArray: "3, 6" }}
                     />
                   ) : (
                     <Polygon
                       positions={buildSectorPolygon(ant.coordinates, ant.azimuthDeg, ant.beamwidthDeg, rangeMeters)}
-                      pathOptions={{ color: ANTENNA_MARKER_COLOR, fillColor: ANTENNA_MARKER_COLOR, fillOpacity: 0.12, weight: 1.5 }}
+                      pathOptions={{ color: "#ffffff", weight: 0.75, fillColor: "url(#rf-coverage-hatch)", fillOpacity: 0.9 }}
                     />
                   )}
                   <Marker
@@ -3455,7 +4483,8 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                     icon={createAntennaIcon(ant)}
                     draggable={true}
                     eventHandlers={{
-                      click: () => {
+                      click: (e) => {
+                        L.DomEvent.stopPropagation(e);
                         setSelectedAntenna(ant);
                         setAntennaEditDraft({ ...ant });
                         setSelectedTrack(null);
@@ -3579,9 +4608,19 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                   icon={createTrackIcon(t, getIFFColor(t.iffStatus))}
                   draggable={isMockTrack}
                   eventHandlers={{
-                    click: () => {
+                    click: (e) => {
+                      L.DomEvent.stopPropagation(e);
                       setSelectedTrack(t);
                       setSelectedSensor(null);
+                    },
+                    contextmenu: (e) => {
+                      L.DomEvent.stopPropagation(e);
+                      (e.originalEvent as MouseEvent).preventDefault();
+                      setTrackContextMenu({
+                        x: (e.originalEvent as MouseEvent).clientX,
+                        y: (e.originalEvent as MouseEvent).clientY,
+                        trackId: t.id,
+                      });
                     },
                     dragend: (e) => {
                       if (!isMockTrack) return;
@@ -3816,144 +4855,9 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                     );
                   })()}
 
-                {/* Tiger Procedure Tracking section */}
-                {tigerTrackId === selectedTrack.id && (
-                  <div style={{
-                    margin: "8px 12px",
-                    padding: "10px",
-                    borderRadius: "6px",
-                    backgroundColor: "rgba(231, 76, 60, 0.1)",
-                    border: "1px dashed #e74c3c",
-                  }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                      <span style={{ fontSize: "11px", fontWeight: "bold", color: "#e74c3c", display: "flex", alignItems: "center", gap: "4px" }}>
-                        <span className="pulse-dot" style={{ display: "inline-block", width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#e74c3c" }}></span>
-                        נוהל נמר פעיל
-                      </span>
-                      <span style={{ fontSize: "12px", fontWeight: "bold", color: tigerTimer > 0 ? "#e74c3c" : "#fff", backgroundColor: tigerTimer > 0 ? "rgba(231,76,60,0.2)" : "#e74c3c", padding: "2px 6px", borderRadius: "4px" }}>
-                        {tigerTimer > 0 ? `${tigerTimer} ש' להנחיה` : "פג תוקף הנחיה!"}
-                      </span>
-                    </div>
-
-                    {/* Friendly Drones in Corridor Confirmation list */}
-                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                      <span style={{ fontSize: "11px", color: "#a0a0a0", fontWeight: "bold", borderBottom: "1px solid #2e2e38", paddingBottom: "4px", display: "block" }}>
-                        סטטוס תגובת כוחותינו:
-                      </span>
-                      {(() => {
-                        const threatCorr = approvedCorridors.find((c) =>
-                          isPointInPolygon([selectedTrack.coordinates.lat, selectedTrack.coordinates.lng], c.geometry)
-                        );
-                        if (!threatCorr) {
-                          return <span style={{ fontSize: "10px", color: "#7f8c8d" }}>אין פוליגון חופף למיקום המטרה</span>;
-                        }
-                        
-                        const friendlyDrones = flights.filter((f) => {
-                          const reqId = f.id.replace("flight", "req");
-                          return threatCorr.id === `approved-${reqId}` && (f.status === "ACTIVE" || f.status === "COMMS_LOSS" || f.status === "ANOMALOUS");
-                        });
-
-                        if (friendlyDrones.length === 0) {
-                          return <span style={{ fontSize: "10px", color: "#7f8c8d" }}>אין רחפנים פעילים בפוליגון זה</span>;
-                        }
-
-                        return (
-                          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                            {friendlyDrones.map((fd) => {
-                              let statusText = "טרם התקבל";
-                              let statusColor = "#e67e22"; // Orange (no response yet)
-                              let detailsEl = null;
-
-                              if (fd.tigerStatus === "PENDING") {
-                                statusText = "הנחיה התקבלה";
-                                statusColor = "#3498db"; // Blue
-                              } else if (fd.tigerStatus === "CONFIRMED" || fd.tigerStatus === "EXECUTED") {
-                                statusText = `בוצע (+100מ' - ${fd.currentAlt}מ')`;
-                                statusColor = "#2ecc71"; // Green
-                              } else if (fd.tigerStatus === "CANNOT_EXECUTE") {
-                                statusText = "לא ניתן לביצוע";
-                                statusColor = "#e74c3c"; // Red
-                                detailsEl = (
-                                  <div style={{ fontSize: "10px", color: "#f1c40f", backgroundColor: "rgba(241,196,15,0.08)", padding: "4px 8px", borderRadius: "4px", marginTop: "2px", borderRight: "2px solid #f1c40f", textAlign: "right" }}>
-                                    <strong>סיבה:</strong> {fd.tigerReason || "לא צוינה סיבה"}
-                                  </div>
-                                );
-                              }
-
-                              return (
-                                <div key={fd.id} style={{ borderBottom: "1px solid #2e2e38", paddingBottom: "6px" }}>
-                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "11px" }}>
-                                    <span style={{ color: "#ecf0f1", fontWeight: "bold" }}>
-                                      {fd.operatorName} ({fd.unit})
-                                    </span>
-                                    <span style={{ fontWeight: "bold", color: statusColor }}>
-                                      {statusText}
-                                    </span>
-                                  </div>
-                                  {detailsEl}
-                                </div>
-                              );
-                            })}
-
-                            {/* Operational Classification and Escalation Actions */}
-                            <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "4px" }}>
-                              <button
-                                onClick={() => handleAction("BLUE", selectedTrack)}
-                                style={{
-                                  width: "100%",
-                                  backgroundColor: "#2ecc71",
-                                  color: "#fff",
-                                  border: "none",
-                                  borderRadius: "4px",
-                                  padding: "6px",
-                                  fontSize: "11px",
-                                  fontWeight: "bold",
-                                  cursor: "pointer",
-                                  boxShadow: "0 2px 4px rgba(46, 204, 113, 0.2)"
-                                }}
-                              >
-                                סווג ככחול בסבירות גבוהה
-                              </button>
-                              <button
-                                onClick={() => handleAction("HAMMER", selectedTrack)}
-                                style={{
-                                  width: "100%",
-                                  backgroundColor: "#e74c3c",
-                                  color: "#fff",
-                                  border: "none",
-                                  borderRadius: "4px",
-                                  padding: "6px",
-                                  fontSize: "11px",
-                                  fontWeight: "bold",
-                                  cursor: "pointer",
-                                  boxShadow: "0 2px 4px rgba(231, 76, 60, 0.2)"
-                                }}
-                              >
-                                הסלם לפטיש אוויר (יירוט/שיבוש)
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  </div>
-                )}
-
                 {/* Action buttons — threats & unidentified */}
                 {(selectedTrack.iffStatus.startsWith("RED") || selectedTrack.iffStatus === "UNIDENTIFIED") && (
                   <div style={styles.floatingCardActions}>
-                    <button
-                      onClick={() => handleAction("TIGER", selectedTrack)}
-                      style={{ ...styles.floatingActionBtn, backgroundColor: "#e74c3c" }}
-                    >נוהל נמר</button>
-                    <button
-                      onClick={() => handleAction("HAMMER", selectedTrack)}
-                      style={{ ...styles.floatingActionBtn, backgroundColor: "#d35400" }}
-                    >פטיש אוויר</button>
-                    <button
-                      onClick={() => handleAction("BLUE", selectedTrack)}
-                      style={{ ...styles.floatingActionBtn, backgroundColor: "#2980b9" }}
-                    >זהה כחברותי</button>
                     <button
                       onClick={() => handleCloseIncident(selectedTrack.id)}
                       style={{ ...styles.floatingActionBtn, backgroundColor: "#555" }}
@@ -3964,20 +4868,6 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                 {/* Action buttons — friendly drones */}
                 {selectedTrack.iffStatus.startsWith("BLUE") && (
                   <div style={styles.floatingCardActions}>
-                    <button
-                      onClick={() => {
-                        onTriggerAlert(`נוהל נמר הופעל עבור רחפן: ${selectedTrack.id}`, {
-                          alertType: "TIGER",
-                          threatLocation: { lat: selectedTrack.coordinates.lat, lng: selectedTrack.coordinates.lng }
-                        });
-                        // Associate the emergency with the first active hostile/unidentified threat, or fallback to the first track
-                        const threat = tracks.find(t => t.iffStatus === "UNIDENTIFIED" || t.iffStatus.startsWith("RED"));
-                        const targetTrackId = threat ? threat.id : (tracks[0]?.id || selectedTrack.id);
-                        setTigerTrackId(targetTrackId);
-                        setTigerTimer(15);
-                      }}
-                      style={{ ...styles.floatingActionBtn, backgroundColor: "#e74c3c" }}
-                    >נוהל נמר</button>
                     <button
                       onClick={() => handleRemoveDrone(selectedTrack.id)}
                       style={{ ...styles.floatingActionBtn, backgroundColor: "#c0392b" }}
@@ -4311,43 +5201,6 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
 
                {selectedRequestItem.status === "APPROVED" && (
                  <>
-                   <button
-                     onClick={() => {
-                       const pts = getRequestGeometry(selectedRequestItem);
-                       let center = { lat: 33.232, lng: 35.566 };
-                       if (pts.length > 0) {
-                         const latSum = pts.reduce((sum, p) => sum + p[0], 0);
-                         const lngSum = pts.reduce((sum, p) => sum + p[1], 0);
-                         center = { lat: latSum / pts.length, lng: lngSum / pts.length };
-                       }
-
-                       // Find any unidentified/threat track inside or near this corridor to bind Tiger to
-                       const threatTrack = tracks.find((t) => {
-                         const isThreat = t.iffStatus === "UNIDENTIFIED" || t.iffStatus.startsWith("RED");
-                         if (!isThreat) return false;
-                         if (pts.length > 0) {
-                           return isPointInPolygon([t.coordinates.lat, t.coordinates.lng], pts);
-                         }
-                         return false;
-                       });
-
-                       const targetTrackId = threatTrack ? threatTrack.id : (tracks.find(t => t.iffStatus === "UNIDENTIFIED" || t.iffStatus.startsWith("RED"))?.id || tracks[0]?.id);
-
-                       onTriggerAlert(`נוהל נמר הופעל במרחב פוליגון: ${selectedRequestItem.polygonName || selectedRequestItem.id}`, {
-                         alertType: "TIGER",
-                         threatLocation: center
-                       });
-
-                       if (targetTrackId) {
-                         setTigerTrackId(targetTrackId);
-                         setTigerTimer(15);
-                       }
-                     }}
-                     style={styles.floatingActionBtnDanger}
-                   >
-                     הפעל נוהל נמר בפוליגון
-                   </button>
-
                    <div style={{ display: "flex", gap: "6px" }}>
                      <button
                        onClick={(e) => {
@@ -4398,186 +5251,6 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
              </div>
           </div>
         )}
-
-            {/* Tiger Procedure Collapsible Control Panel */}
-            {tigerTrackId && tigerPanelOpen && (() => {
-              const tigerTrack = allActiveTracks.find(t => t.id === tigerTrackId);
-              if (!tigerTrack) return null;
-
-              const friendlyDrones = flights.filter((f) => 
-                f.status === "ACTIVE" || f.status === "COMMS_LOSS" || f.status === "ANOMALOUS"
-              );
-
-              return (
-                <div style={{
-                  position: "absolute",
-                  bottom: showGantt ? "300px" : "20px",
-                  left: "20px",
-                  zIndex: 1002,
-                  width: "360px",
-                  backgroundColor: "rgba(20, 21, 26, 0.98)",
-                  border: "1px solid rgba(231, 76, 60, 0.45)",
-                  borderRadius: "8px",
-                  boxShadow: "0 8px 32px rgba(0, 0, 0, 0.55)",
-                  backdropFilter: "blur(8px)",
-                  overflow: "hidden",
-                  direction: "rtl"
-                }}>
-                  {/* Header */}
-                  <div style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "10px 14px",
-                    backgroundColor: "rgba(20, 21, 26, 0.6)",
-                    borderBottom: "1px solid rgba(255, 255, 255, 0.08)"
-                  }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                      <span className="pulse-dot" style={{ display: "inline-block", width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#e74c3c" }}></span>
-                      <span style={{ fontSize: "12px", fontWeight: "bold", color: "#ecf0f1" }}>
-                        ניהול נוהל נמר — מטרה {tigerTrackId}
-                      </span>
-                    </div>
-                    <button
-                      style={{
-                        background: "none",
-                        border: "none",
-                        color: "#7f8c8d",
-                        cursor: "pointer",
-                        fontSize: "12px",
-                        fontWeight: "bold"
-                      }}
-                      onClick={() => setTigerPanelOpen(false)}
-                    >
-                      ✕
-                    </button>
-                  </div>
-
-                  {/* Body */}
-                  <div style={{ padding: "12px" }}>
-                    <span style={{ fontSize: "11px", color: "#a0a0a0", fontWeight: "bold", display: "block", marginBottom: "8px" }}>
-                      ריכוז תגובות כוחותינו בגזרה:
-                    </span>
-                    
-                    {friendlyDrones.length === 0 ? (
-                      <span style={{ fontSize: "11px", color: "#7f8c8d", display: "block", textAlign: "center", padding: "10px" }}>
-                        אין רחפנים של כוחותינו באוויר
-                      </span>
-                    ) : (
-                      <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "180px", overflowY: "auto", marginBottom: "12px", paddingLeft: "4px" }}>
-                        {friendlyDrones.map((fd) => {
-                          let statusText = "לא הגיב";
-                          let statusColor = "#95a5a6"; // Gray (no response yet)
-                          let detailsEl = null;
-
-                          if (fd.tigerStatus === "PENDING") {
-                            statusText = "הנחיה התקבלה";
-                            statusColor = "#3498db"; // Blue
-                          } else if (fd.tigerStatus === "CONFIRMED" || fd.tigerStatus === "EXECUTED") {
-                            statusText = `בוצע (גובה ${fd.currentAlt} מ')`;
-                            statusColor = "#2ecc71"; // Green
-                          } else if (fd.tigerStatus === "CANNOT_EXECUTE") {
-                            statusText = "לא ניתן לביצוע";
-                            statusColor = "#e74c3c"; // Red
-                            detailsEl = (
-                              <div style={{ fontSize: "10px", color: "#f1c40f", backgroundColor: "rgba(241,196,15,0.08)", padding: "4px 8px", borderRadius: "4px", marginTop: "4px", borderRight: "2px solid #f1c40f", textAlign: "right" }}>
-                                <strong>סיבה:</strong> {fd.tigerReason || "לא צוינה סיבה"}
-                              </div>
-                            );
-                          }
-
-                          return (
-                            <div key={fd.id} style={{ backgroundColor: "rgba(255,255,255,0.02)", border: "1px solid rgba(255, 255, 255, 0.08)", borderRadius: "6px", padding: "8px 10px" }}>
-                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "11px", marginBottom: "4px" }}>
-                                <span style={{ color: "#ecf0f1", fontWeight: "bold" }}>
-                                  {fd.operatorName} ({fd.unit})
-                                </span>
-                                <span style={{ fontWeight: "bold", color: statusColor }}>
-                                  ● {statusText}
-                                </span>
-                              </div>
-                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "10px", color: "#a0a0a0" }}>
-                                <span>{fd.droneModel} · גובה: {fd.currentAlt} מ'</span>
-                                <span>סוללה: {fd.battery}%</span>
-                              </div>
-                              {detailsEl}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    {/* Actions */}
-                    <div style={{ display: "flex", gap: "8px", marginTop: "8px", borderTop: "1px solid rgba(87, 95, 112, 0.15)", paddingTop: "10px" }}>
-                      <button
-                        onClick={() => handleAction("BLUE", tigerTrack)}
-                        style={{
-                          flex: 1,
-                          backgroundColor: "#2ecc71",
-                          color: "#fff",
-                          border: "none",
-                          borderRadius: "6px",
-                          padding: "8px",
-                          fontSize: "11px",
-                          fontWeight: "bold",
-                          cursor: "pointer",
-                          boxShadow: "0 2px 5px rgba(46, 204, 113, 0.2)"
-                        }}
-                      >
-                        סווג ככחול (מטרה כוח)
-                      </button>
-                      <button
-                        onClick={() => handleAction("HAMMER", tigerTrack)}
-                        style={{
-                          flex: 1,
-                          backgroundColor: "#e74c3c",
-                          color: "#fff",
-                          border: "none",
-                          borderRadius: "6px",
-                          padding: "8px",
-                          fontSize: "11px",
-                          fontWeight: "bold",
-                          cursor: "pointer",
-                          boxShadow: "0 2px 5px rgba(231, 76, 60, 0.2)"
-                        }}
-                      >
-                        הסלם לפטיש אוויר (יירוט)
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* Tiger Panel Sticky Toggle Mini Badge */}
-            {tigerTrackId && !tigerPanelOpen && (
-              <button
-                onClick={() => setTigerPanelOpen(true)}
-                style={{
-                  position: "absolute",
-                  bottom: showGantt ? "300px" : "20px",
-                  left: "20px",
-                  zIndex: 1002,
-                  backgroundColor: "#e74c3c",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: "50%",
-                  width: "42px",
-                  height: "42px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  cursor: "pointer",
-                  boxShadow: "0 0 15px rgba(231, 76, 60, 0.6)",
-                  fontSize: "16px",
-                  fontWeight: "bold",
-                  animation: "pulse-glow 1.5s infinite"
-                }}
-                title="פתח חלון ניהול נוהל נמר"
-              >
-                🐯
-              </button>
-            )}
 
             {/* Backdrop for closing context menu */}
             {contextMenu && (
@@ -4763,6 +5436,117 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                 </button>
               </div>
             )}
+
+            {/* Backdrop for closing the track-tagging context menu */}
+            {trackContextMenu && (
+              <div
+                onClick={() => setTrackContextMenu(null)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setTrackContextMenu(null);
+                }}
+                style={{
+                  position: "fixed",
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  zIndex: 9998,
+                  background: "transparent",
+                }}
+              />
+            )}
+
+            {/* Track Tagging Context Menu — קצין הרוק"ק classifies a drone/aircraft on right-click */}
+            {trackContextMenu && (() => {
+              const taggedTrack = allActiveTracks.find(t => t.id === trackContextMenu.trackId);
+              if (!taggedTrack) return null;
+              return (
+                <div
+                  style={{
+                    position: "fixed",
+                    top: `${trackContextMenu.y}px`,
+                    left: `${trackContextMenu.x}px`,
+                    zIndex: 9999,
+                    width: "210px",
+                    backgroundColor: "rgba(20, 21, 26, 0.95)",
+                    border: "1px solid rgba(255, 255, 255, 0.12)",
+                    borderRadius: "6px",
+                    boxShadow: "0 8px 24px rgba(0, 0, 0, 0.6)",
+                    backdropFilter: "blur(12px)",
+                    padding: "4px 0",
+                    direction: "rtl",
+                    textAlign: "right",
+                  }}
+                >
+                  <div style={{
+                    padding: "6px 12px 8px 12px",
+                    borderBottom: "1px solid rgba(255, 255, 255, 0.08)",
+                    fontSize: "11px",
+                    fontWeight: "bold",
+                    color: "#ecf0f1",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "2px"
+                  }}>
+                    <span>🎯 תיוג ישות</span>
+                    <span style={{ fontSize: "10px", color: "#a0a0a0" }}>{taggedTrack.id.split(" - ")[0]}</span>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      applyTrackTag(taggedTrack.id, { flagged: !taggedTrack.flagged });
+                      showToast(taggedTrack.flagged ? "דגל המטרה הוסר" : "הישות סומנה בדגל מטרה", "WARNING");
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.08)"; e.currentTarget.style.color = "#fff"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; e.currentTarget.style.color = "#ecf0f1"; }}
+                    style={styles.contextMenuItem}
+                  >
+                    <span style={{ marginLeft: "8px" }}>🚩</span>
+                    {taggedTrack.flagged ? "הסר דגל מטרה" : "סמן כדגל מטרה"}
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      applyTrackTag(taggedTrack.id, { iffStatus: "RED_CERTAIN" });
+                      showToast("הישות סומנה כמטרה ודאית", "DANGER");
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.08)"; e.currentTarget.style.color = "#fff"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; e.currentTarget.style.color = "#ecf0f1"; }}
+                    style={styles.contextMenuItem}
+                  >
+                    <span style={{ marginLeft: "8px" }}>🔴</span>
+                    סמן כמטרה ודאית
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      applyTrackTag(taggedTrack.id, { iffStatus: "BLUE_CERTAIN" });
+                      showToast("הישות סומנה ככוחותינו", "SUCCESS");
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.08)"; e.currentTarget.style.color = "#fff"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; e.currentTarget.style.color = "#ecf0f1"; }}
+                    style={styles.contextMenuItem}
+                  >
+                    <span style={{ marginLeft: "8px" }}>🔵</span>
+                    סמן ככוחותינו
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      applyTrackTag(taggedTrack.id, { iffStatus: "UNIDENTIFIED" });
+                      showToast("הישות סומנה כבלתי מזוהה", "INFO");
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.08)"; e.currentTarget.style.color = "#fff"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; e.currentTarget.style.color = "#ecf0f1"; }}
+                    style={styles.contextMenuItem}
+                  >
+                    <span style={{ marginLeft: "8px" }}>🟡</span>
+                    סמן כבלתי מזוהה
+                  </button>
+                </div>
+              );
+            })()}
 
             {isEditingPoints && (
               <div style={{
@@ -5385,75 +6169,51 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: "var(--shadow-md)",
     boxSizing: "border-box",
   },
-  floatingAntennaWidget: {
-    position: "absolute",
-    top: "10px",
-    right: "410px",
-    zIndex: 1000,
+  spaceSectionLabel: {
+    fontSize: "11px",
+    fontWeight: "bold",
+    color: "var(--color-text-muted)",
+  },
+  spaceToolBtn: {
     display: "flex",
     flexDirection: "column",
-    alignItems: "flex-end",
-    direction: "rtl" as const,
-  },
-  floatingAntennaToggle: {
-    backgroundColor: "var(--color-bg-card)",
-    border: "1px solid var(--color-border)",
-    color: "var(--color-text)",
-    padding: "8px 12px",
-    borderRadius: "var(--radius-sm)",
-    fontSize: "var(--text-xs)",
-    fontWeight: "var(--fw-bold)",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "3px",
+    padding: "7px 2px",
+    border: "1px solid var(--color-border-subtle)",
+    borderRadius: "4px",
     cursor: "pointer",
-    boxShadow: "var(--shadow-sm)",
   },
-  floatingAntennaContent: {
-    backgroundColor: "var(--color-bg-card)",
-    border: "1px solid var(--color-border)",
-    borderRadius: "var(--radius-sm)",
-    padding: "12px",
-    marginTop: "5px",
+  spaceToolHint: {
+    fontSize: "10px",
+    color: "#22c55e",
+    backgroundColor: "rgba(34,197,94,0.1)",
+    border: "1px solid rgba(34,197,94,0.4)",
+    borderRadius: "4px",
+    padding: "6px 8px",
     display: "flex",
     flexDirection: "column",
-    gap: "8px",
-    width: "230px",
-    boxShadow: "var(--shadow-md)",
-    boxSizing: "border-box",
+    gap: "4px",
   },
-  floatingEnemyWidget: {
-    position: "absolute",
-    top: "10px",
-    right: "610px",
-    zIndex: 1000,
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "flex-end",
-    direction: "rtl" as const,
+  spaceStackBtn: {
+    background: "none",
+    border: "1px solid var(--color-border-subtle)",
+    borderRadius: "3px",
+    color: "var(--color-text-muted)",
+    fontSize: "8px",
+    lineHeight: 1,
+    padding: "3px 4px",
   },
-  floatingEnemyToggle: {
-    backgroundColor: "var(--color-bg-card)",
-    border: "1px solid var(--color-border)",
-    color: "var(--color-text)",
-    padding: "8px 12px",
-    borderRadius: "var(--radius-sm)",
-    fontSize: "var(--text-xs)",
-    fontWeight: "var(--fw-bold)",
+  spacePrimaryBtn: {
+    backgroundColor: "rgba(34,197,94,0.15)",
+    color: "#22c55e",
+    border: "1px solid rgba(34,197,94,0.4)",
+    borderRadius: "4px",
+    padding: "8px",
+    fontSize: "11px",
+    fontWeight: "bold",
     cursor: "pointer",
-    boxShadow: "var(--shadow-sm)",
-  },
-  floatingEnemyContent: {
-    backgroundColor: "var(--color-bg-card)",
-    border: "1px solid var(--color-border)",
-    borderRadius: "var(--radius-sm)",
-    padding: "12px",
-    marginTop: "5px",
-    display: "flex",
-    flexDirection: "column",
-    gap: "9px",
-    width: "270px",
-    boxShadow: "var(--shadow-md)",
-    boxSizing: "border-box",
-    maxHeight: "70vh",
-    overflowY: "auto",
   },
   enemyQuickRangeRow: {
     display: "flex",

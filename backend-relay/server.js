@@ -7,6 +7,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_FILE = path.join(__dirname, "persisted_requests.json");
 const ANTENNA_DATA_FILE = path.join(__dirname, "persisted_antennas.json");
+const SPACE_AREA_DATA_FILE = path.join(__dirname, "persisted_space_areas.json");
 
 // Load initially saved requests if they exist
 let persistedRequests = [];
@@ -48,6 +49,26 @@ function saveAntennas() {
   }
 }
 
+// Load initially saved ארגון המרחב (space organization) areas if they exist
+let persistedSpaceAreas = [];
+try {
+  if (fs.existsSync(SPACE_AREA_DATA_FILE)) {
+    const raw = fs.readFileSync(SPACE_AREA_DATA_FILE, "utf-8");
+    persistedSpaceAreas = JSON.parse(raw);
+    console.log(`Loaded ${persistedSpaceAreas.length} space areas from disk`);
+  }
+} catch (e) {
+  console.error("Failed to load persisted space areas:", e);
+}
+
+function saveSpaceAreas() {
+  try {
+    fs.writeFileSync(SPACE_AREA_DATA_FILE, JSON.stringify(persistedSpaceAreas, null, 2), "utf-8");
+  } catch (e) {
+    console.error("Failed to write space areas to disk:", e);
+  }
+}
+
 const wss = new WebSocketServer({ port: 8080 });
 
 console.log("WebSocket relay server running on ws://localhost:8080");
@@ -67,6 +88,13 @@ wss.on("connection", (ws) => {
     ws.send(JSON.stringify({
       type: "INITIAL_ANTENNAS_LOAD",
       antennas: persistedAntennas
+    }));
+  }
+
+  if (persistedSpaceAreas.length > 0) {
+    ws.send(JSON.stringify({
+      type: "INITIAL_SPACE_AREAS_LOAD",
+      spaceAreas: persistedSpaceAreas
     }));
   }
 
@@ -129,6 +157,20 @@ wss.on("connection", (ws) => {
         persistedAntennas = persistedAntennas.filter((a) => a.id !== parsed.antennaId);
         saveAntennas();
         console.log(`Removed antenna: ${parsed.antennaId}`);
+      } else if (parsed.type === "SPACE_AREA_UPSERT") {
+        const area = parsed.spaceArea;
+        const idx = persistedSpaceAreas.findIndex((a) => a.id === area.id);
+        if (idx !== -1) {
+          persistedSpaceAreas[idx] = area;
+        } else {
+          persistedSpaceAreas.push(area);
+        }
+        saveSpaceAreas();
+        console.log(`Upserted space area: ${area.id}`);
+      } else if (parsed.type === "SPACE_AREA_REMOVE") {
+        persistedSpaceAreas = persistedSpaceAreas.filter((a) => a.id !== parsed.spaceAreaId);
+        saveSpaceAreas();
+        console.log(`Removed space area: ${parsed.spaceAreaId}`);
       }
 
       // Broadcast to all other connected clients

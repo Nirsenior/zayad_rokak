@@ -34,6 +34,8 @@ export const figmaAssets = {
   /** Side bar 719:27607 — חשיפה תקיפה */
   sidebarRailBg: `${BASE}/sidebar-rail-bg.svg`,
   sideMenuMissionIcon: `${BASE}/side-menu-mission-icon.svg`,
+  /** Folded map / atlas glyph — used for the main tactical map nav item */
+  sideMenuMapIcon: `${BASE}/side-menu-mission.svg`,
   sideMenuAreaIcon: `${BASE}/side-menu-area-icon.svg`,
   sideMenuJournalIcon: `${BASE}/side-menu-journal-icon.svg`,
   sideMenuGuardIcon: `${BASE}/side-menu-guard-icon.svg`,

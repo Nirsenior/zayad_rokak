@@ -31,10 +31,9 @@ export interface RFAntenna {
 }
 
 export const ANTENNA_PRESETS: AntennaPreset[] = [
-  { id: "OMNI_WHIP", name: "מוט אנכי כל-כיווני", freqMHz: 400, powerDbm: 33, gainDbi: 3, beamwidthDeg: 360, defaultHeightM: 3 },
-  { id: "YAGI_DIRECTIONAL", name: "יאגי כיוונית", freqMHz: 900, powerDbm: 30, gainDbi: 12, beamwidthDeg: 40, defaultHeightM: 5 },
-  { id: "SECTOR_PANEL", name: "פאנל סקטור", freqMHz: 2400, powerDbm: 27, gainDbi: 15, beamwidthDeg: 90, defaultHeightM: 8 },
-  { id: "PARABOLIC_DISH", name: "צלחת פרבולית (קישור נ.-נ.)", freqMHz: 5800, powerDbm: 20, gainDbi: 30, beamwidthDeg: 6, defaultHeightM: 10 },
+  { id: "DIRECTIONAL", name: "כיוונית", freqMHz: 900, powerDbm: 30, gainDbi: 12, beamwidthDeg: 40, defaultHeightM: 5 },
+  { id: "OMNI", name: "אומנית", freqMHz: 400, powerDbm: 33, gainDbi: 3, beamwidthDeg: 360, defaultHeightM: 3 },
+  { id: "EITECH", name: "אי-טק", freqMHz: 2400, powerDbm: 27, gainDbi: 15, beamwidthDeg: 90, defaultHeightM: 8 },
 ];
 
 export function getAntennaPreset(presetId: string): AntennaPreset | undefined {
