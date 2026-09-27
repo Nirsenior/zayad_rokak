@@ -3,6 +3,8 @@ import { SystemHeader } from "./components/shell/SystemHeader";
 import { MainSideMenu } from "./components/shell/MainSideMenu";
 import { figmaAssets } from "./assets/figmaAssets";
 import { TacticalMap } from "./components/TacticalMap";
+import type { MapLayerKey } from "./data/tableFeeds";
+import { TablesModule } from "./components/TablesModule";
 import { PilotsConsole } from "./components/PilotsConsole";
 import { DebriefingConsole } from "./components/DebriefingConsole";
 import { OperatorsDronesConsole } from "./components/OperatorsDronesConsole";
@@ -16,11 +18,12 @@ import {
   Route,
   Drone,
   Antenna,
+  Table2,
   type LucideIcon,
 } from "lucide-react";
 
 
-type ScreenType = "MAP" | "REQUESTS" | "SPACE_ORG" | "PENETRATION_ROUTES" | "RF_PLANNING" | "INCIDENTS" | "OPERATORS" | "PILOTS";
+type ScreenType = "MAP" | "REQUESTS" | "SPACE_ORG" | "PENETRATION_ROUTES" | "RF_PLANNING" | "INCIDENTS" | "OPERATORS" | "PILOTS" | "TABLES";
 
 interface Conflict {
   type: string;
@@ -66,6 +69,7 @@ interface ActiveFlight {
 export default function App() {
   const [activeScreen, setActiveScreen] = useState<ScreenType>("MAP");
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [layerRequest, setLayerRequest] = useState<{ layer: MapLayerKey; nonce: number } | null>(null);
   const [ganttOpen, setGanttOpen] = useState(false);
   const [activeAlert, setActiveAlert] = useState<string | null>(null);
   const [liveTracks, setLiveTracks] = useState<Record<string, any>>({});
@@ -1077,6 +1081,7 @@ export default function App() {
             onUpsertAntenna={handleUpsertAntenna}
             onRemoveAntenna={handleRemoveAntenna}
             spaceAreas={spaceAreas}
+            layerRequest={layerRequest}
             onUpsertSpaceArea={handleUpsertSpaceArea}
             onRemoveSpaceArea={handleRemoveSpaceArea}
           />
@@ -1174,6 +1179,15 @@ export default function App() {
           />
         );
 
+      case "TABLES":
+        return (
+          <TablesModule
+            onShowOnMap={(layer) => {
+              setLayerRequest((prev) => ({ layer, nonce: (prev?.nonce ?? 0) + 1 }));
+              setActiveScreen("MAP");
+            }}
+          />
+        );
       case "PILOTS":
         return <PilotsConsole flights={flights} />;
       case "INCIDENTS":
@@ -1207,6 +1221,8 @@ export default function App() {
         return "תחקור וניתוח מרחבי";
       case "OPERATORS":
         return "מאגר רחפנים";
+      case "TABLES":
+        return "טבלאות";
     }
   };
 
@@ -1223,6 +1239,7 @@ export default function App() {
     { screen: "RF_PLANNING", Icon: Antenna, label: "תכנון RF" },
     { screen: "PILOTS", icon: figmaAssets.mpIconPerson, label: "מטיסים" },
     { screen: "OPERATORS", Icon: Drone, label: "מאגר רחפנים" },
+    { screen: "TABLES", Icon: Table2, label: "טבלאות" },
     { screen: "INCIDENTS", icon: figmaAssets.sideMenuJournalIcon, label: "תחקור", badge: 3 },
   ];
 

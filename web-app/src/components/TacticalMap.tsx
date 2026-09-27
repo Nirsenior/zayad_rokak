@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import { DefenseLayers } from "./DefenseLayers";
+import { DATA_SOURCE, type MapLayerKey } from "../data/tableFeeds";
 import { MapContainer, TileLayer, Marker, Polygon, Circle, Polyline, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -385,6 +387,8 @@ interface TacticalMapProps {
   onUpsertAntenna?: (antenna: RFAntenna) => void;
   onRemoveAntenna?: (id: string) => void;
   spaceAreas?: SpaceArea[];
+  /** turns a defense layer on when another screen (e.g. Tables) asks to show it; bump nonce to re-fire */
+  layerRequest?: { layer: MapLayerKey; nonce: number } | null;
   onUpsertSpaceArea?: (area: SpaceArea) => void;
   onRemoveSpaceArea?: (id: string) => void;
   showSpaceOrgPanel?: boolean;
@@ -1024,6 +1028,7 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
   onUpsertAntenna,
   onRemoveAntenna,
   spaceAreas = [],
+  layerRequest = null,
   onUpsertSpaceArea,
   onRemoveSpaceArea,
   showSpaceOrgPanel = false,
@@ -1538,6 +1543,19 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
   const [showAntennas, setShowAntennas] = useState(true);
   const [showEnemyHeatmap, setShowEnemyHeatmap] = useState(true);
   const [showSpaceAreas, setShowSpaceAreas] = useState(true);
+  const [showFences, setShowFences] = useState(false);
+  const [showRawRoutes, setShowRawRoutes] = useState(false);
+  const [showSchematicRoutes, setShowSchematicRoutes] = useState(false);
+  const [showDivisionSystems, setShowDivisionSystems] = useState(false);
+  const [showDecoys, setShowDecoys] = useState(false);
+  useEffect(() => {
+    if (!layerRequest) return;
+    const setters: Record<MapLayerKey, (v: boolean) => void> = {
+      fences: setShowFences, rawRoutes: setShowRawRoutes, schematicRoutes: setShowSchematicRoutes,
+      divisionSystems: setShowDivisionSystems, decoys: setShowDecoys,
+    };
+    setters[layerRequest.layer](true);
+  }, [layerRequest]);
 
   // RF antenna placement + editing state
   const [selectedAntenna, setSelectedAntenna] = useState<RFAntenna | null>(null);
@@ -3648,6 +3666,26 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                 <input type="checkbox" checked={showSpaceAreas} onChange={(e) => setShowSpaceAreas(e.target.checked)} />
                 ארגון המרחב
               </label>
+              <label style={styles.layerCheckboxRow}>
+                <input type="checkbox" checked={showFences} onChange={(e) => setShowFences(e.target.checked)} />
+                גדרות (חותכים) <span style={{ opacity: 0.6, fontSize: 10 }}>({DATA_SOURCE})</span>
+              </label>
+              <label style={styles.layerCheckboxRow}>
+                <input type="checkbox" checked={showRawRoutes} onChange={(e) => setShowRawRoutes(e.target.checked)} />
+                נתיבי חדירה — גולמי <span style={{ opacity: 0.6, fontSize: 10 }}>({DATA_SOURCE})</span>
+              </label>
+              <label style={styles.layerCheckboxRow}>
+                <input type="checkbox" checked={showSchematicRoutes} onChange={(e) => setShowSchematicRoutes(e.target.checked)} />
+                נתיבי חדירה — סכמטי <span style={{ opacity: 0.6, fontSize: 10 }}>({DATA_SOURCE})</span>
+              </label>
+              <label style={styles.layerCheckboxRow}>
+                <input type="checkbox" checked={showDivisionSystems} onChange={(e) => setShowDivisionSystems(e.target.checked)} />
+                מערכות הגנה אוגדתיות <span style={{ opacity: 0.6, fontSize: 10 }}>({DATA_SOURCE})</span>
+              </label>
+              <label style={styles.layerCheckboxRow}>
+                <input type="checkbox" checked={showDecoys} onChange={(e) => setShowDecoys(e.target.checked)} />
+                מערכות דמה <span style={{ opacity: 0.6, fontSize: 10 }}>({DATA_SOURCE})</span>
+              </label>
             </div>
           )}
         </div>
@@ -4457,6 +4495,14 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
                 }}
               />
             ))}
+
+          <DefenseLayers
+            showFences={showFences}
+            showRawRoutes={showRawRoutes}
+            showSchematicRoutes={showSchematicRoutes}
+            showDivisionSystems={showDivisionSystems}
+            showDecoys={showDecoys}
+          />
 
           {/* RF antenna coverage + markers — includes the in-progress placement draft, if any,
               so the placing user sees it before saving (it isn't in `antennas`/synced yet) */}
